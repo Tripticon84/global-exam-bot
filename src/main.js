@@ -180,12 +180,18 @@ async function runAutomation() {
                         console.log('\n🧠 Sélection des réponses avec l\'IA (batch)...');
                         const letters = await getAIAnswersForConversationBatch(data.transcription, data.questions);
                         for (let i = 0; i < data.questions.length; i++) {
-                            await selectAnswerByLetter(page, i, letters[i]);
+                            // Vérifier que la lettre est valide pour cette question (certaines n'ont que 3 réponses)
+                            const numAnswers = data.questions[i].reponses.length;
+                            const validLetters = ['A', 'B', 'C', 'D'].slice(0, numAnswers);
+                            const letter = validLetters.includes(letters[i].toUpperCase()) ? letters[i] : validLetters[Math.floor(Math.random() * numAnswers)];
+                            await selectAnswerByLetter(page, i, letter);
                         }
                     } else {
                         console.log('\n🎲 Sélection aléatoire...');
                         for (let i = 0; i < data.questions.length; i++) {
-                            const randomLetter = ['A', 'B', 'C', 'D'][Math.floor(Math.random() * 4)];
+                            // Utiliser le nombre réel de réponses pour cette question
+                            const numAnswers = data.questions[i].reponses.length;
+                            const randomLetter = ['A', 'B', 'C', 'D'][Math.floor(Math.random() * numAnswers)];
                             await selectAnswerByLetter(page, i, randomLetter);
                         }
                     }

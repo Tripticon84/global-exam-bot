@@ -152,6 +152,23 @@ export async function solveConversation(page) {
  */
 export async function selectAnswer(page, questionIndex, answerIndex) {
     const selector = `[data-testid="question-${questionIndex}"] [data-testid="exam-answer-${answerIndex + 1}"]`;
+
+    // Vérifier que l'élément existe avant de cliquer
+    const element = await page.$(selector);
+    if (!element) {
+        // Si l'élément n'existe pas, compter les réponses disponibles et choisir aléatoirement
+        const availableAnswers = await page.$$(`[data-testid="question-${questionIndex}"] [data-testid^="exam-answer-"]`);
+        const numAnswers = availableAnswers.length;
+        if (numAnswers === 0) {
+            throw new Error(`Aucune réponse trouvée pour la question ${questionIndex}`);
+        }
+        const fallbackIndex = Math.floor(Math.random() * numAnswers);
+        const fallbackSelector = `[data-testid="question-${questionIndex}"] [data-testid="exam-answer-${fallbackIndex + 1}"]`;
+        await page.click(fallbackSelector);
+        console.log(`⚠️ Réponse ${answerIndex + 1} non trouvée, fallback sur réponse ${fallbackIndex + 1} pour la question ${questionIndex + 1}`);
+        return;
+    }
+
     await page.click(selector);
     console.log(`✓ Réponse ${answerIndex + 1} sélectionnée pour la question ${questionIndex + 1}`);
 }
