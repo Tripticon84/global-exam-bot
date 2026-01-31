@@ -8,6 +8,7 @@ Bot d'automatisation pour compléter les exercices sur GlobalExam (TOEIC).
 - ✅ Navigation vers les plannings d'exercices
 - ✅ Détection et filtrage des exercices à faire
 - ✅ Support de plusieurs types d'exercices
+  - **Photographie** (réponses aléatoires - pas d'IA)
   - **Question-Réponse**
   - **Conversation**
   - **Monologue**
@@ -19,6 +20,7 @@ Bot d'automatisation pour compléter les exercices sur GlobalExam (TOEIC).
 - ✅ Temps de réflexion aléatoire configurable
 - ✅ Exécution par section (une section par lancement)
 - ✅ Résumé de session à la fin
+- ✅ **Intégration IA** (ChatGPT / Gemini) pour sélectionner les bonnes réponses
 
 ## 🚀 Installation
 
@@ -78,10 +80,12 @@ Le bot va :
 
 ## 📁 Structure du projet
 
-```
+```text
 global-exam-bot/
 ├── src/
 │   ├── main.js                 # Point d'entrée principal
+│   ├── ai/
+│   │   └── ai-provider.js      # Module IA (ChatGPT / Gemini)
 │   ├── gets/
 │   │   └── get-all-exos.js     # Récupération des exercices
 │   └── exercices/
@@ -93,6 +97,36 @@ global-exam-bot/
 ├── package.json
 └── README.md
 ```
+
+## 🤖 Configuration IA
+
+Le bot peut utiliser une IA pour sélectionner les bonnes réponses. Deux providers sont supportés :
+
+### OpenAI (ChatGPT)
+
+1. Obtenez une clé API sur [OpenAI Platform](https://platform.openai.com/api-keys)
+2. Configurez dans `.env` :
+
+```env
+AI_PROVIDER=openai
+OPENAI_API_KEY=sk-votre-cle-api
+OPENAI_MODEL=gpt-4o-mini
+```
+
+### Google Gemini
+
+1. Obtenez une clé API sur [Google AI Studio](https://aistudio.google.com/app/apikey)
+2. Configurez dans `.env` :
+
+```env
+AI_PROVIDER=gemini
+GEMINI_API_KEY=votre-cle-api
+GEMINI_MODEL=gemini-2.0-flash
+```
+
+> 💡 **Sans configuration IA**, le bot sélectionnera des réponses aléatoires.
+
+> 📸 **Note** : Les exercices **Photographie** utilisent toujours des réponses aléatoires (l'IA n'est pas utile sans texte/transcription).
 
 ## 🔧 Configuration avancée
 
@@ -112,5 +146,4 @@ const SECTIONS_TO_SKIP = [
 
 ## 📝 TODO
 
-- [ ] Intégration IA pour sélectionner les bonnes réponses (actuellement aléatoire)
-- [ ] Support des exercices Photographie (Listening Partie 1)
+- [ ] Améliorer la précision de l'IA avec des prompts plus spécifiques

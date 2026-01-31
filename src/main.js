@@ -5,6 +5,7 @@ import { detectExerciceType } from './exercices/exercices-types.js';
 import { solveConversation, selectAnswerByLetter, validateAnswers, getProgress, waitBasedOnAudio } from './exercices/conversation.js';
 import { solvePhrasesATrous, selectAnswerByLetter as selectAnswerByLetterPAT, validateAnswers as validateAnswersPAT, getProgress as getProgressPAT, } from './exercices/phrases-a-troue.js';
 import { solveTextesACompleter, getCurrentQuestion, selectAnswerByLetter as selectAnswerByLetterTAC, clickNextButton, getProgress as getProgressTAC } from './exercices/textes-a-completer.js';
+import { isAIConfigured, getAIAnswerForConversation, getAIAnswerForFillInTheBlank, getAIAnswerForTextCompletion } from './ai/ai-provider.js';
 
 dotenv.config();
 
@@ -146,9 +147,18 @@ async function runAutomation() {
             console.log('Type d\'exercice détecté:', exerciceType ? exerciceType.label : 'Inconnu');
 
             // Résoudre l'exercice selon son type
-            if (exerciceType && exerciceType.type === 'Conversation' || exerciceType.type === 'Monologue') {
+            if (exerciceType && exerciceType.type === 'Conversation' || exerciceType.type === 'Monologue' || exerciceType.type === 'QuestionResponse' || exerciceType.type === 'Photograph') {
                 // Boucle pour résoudre toutes les étapes de l'exercice
                 let isExerciseComplete = false;
+
+                // Fermer les pop-ups si présents, sinon passer à la suite après un délai
+                try {
+                    await page.waitForSelector('button[id="axeptio_btn_acceptAll"]', { timeout: 3000 });
+                    await page.click('button[id="axeptio_btn_acceptAll"]');
+                } catch (e) {
+                    // Le bouton n'est pas apparu, on continue
+                }
+
 
                 while (!isExerciseComplete) {
                     // Récupérer les données de l'exercice (transcription + questions)
@@ -164,12 +174,20 @@ async function runAutomation() {
                     // Attendre le temps de l'audio + temps aléatoire avant de répondre
                     await waitBasedOnAudio(page, WAIT_ENABLED, WAIT_MIN_EXTRA, WAIT_MAX_EXTRA);
 
-                    // TODO: Implémenter la logique pour trouver les bonnes réponses
-                    // Pour l'instant, on sélectionne des réponses aléatoires
-                    console.log('\n⚠ Sélection de réponses aléatoires (à remplacer par IA)...');
-                    for (let i = 0; i < data.questions.length; i++) {
-                        const randomLetter = ['A', 'B', 'C', 'D'][Math.floor(Math.random() * 4)];
-                        await selectAnswerByLetter(page, i, randomLetter);
+                    // Sélectionner les réponses avec l'IA ou aléatoirement
+                    // Pour Photograph, pas d'IA (inutile car pas de texte)
+                    if (isAIConfigured()) {
+                        console.log('\n🧠 Sélection des réponses avec l\'IA...');
+                        for (let i = 0; i < data.questions.length; i++) {
+                            const letter = await getAIAnswerForConversation(data.transcription, data.questions[i]);
+                            await selectAnswerByLetter(page, i, letter);
+                        }
+                    } else {
+                        console.log('\n🎲 Sélection aléatoire...');
+                        for (let i = 0; i < data.questions.length; i++) {
+                            const randomLetter = ['A', 'B', 'C', 'D'][Math.floor(Math.random() * 4)];
+                            await selectAnswerByLetter(page, i, randomLetter);
+                        }
                     }
 
                     // Valider les réponses
@@ -210,12 +228,19 @@ async function runAutomation() {
                     // Attendre un temps aléatoire pour simuler la réflexion
                     await waitRandomTime(page, WAIT_ENABLED, WAIT_MIN_EXTRA, WAIT_MAX_EXTRA);
 
-                    // TODO: Implémenter la logique pour trouver les bonnes réponses
-                    // Pour l'instant, on sélectionne des réponses aléatoires
-                    console.log('\n⚠ Sélection de réponses aléatoires (à remplacer par IA)...');
-                    for (let i = 0; i < data.questions.length; i++) {
-                        const randomLetter = ['A', 'B', 'C', 'D'][Math.floor(Math.random() * 4)];
-                        await selectAnswerByLetterPAT(page, i, randomLetter);
+                    // Sélectionner les réponses avec l'IA ou aléatoirement
+                    if (isAIConfigured()) {
+                        console.log('\n🧠 Sélection des réponses avec l\'IA...');
+                        for (let i = 0; i < data.questions.length; i++) {
+                            const letter = await getAIAnswerForFillInTheBlank(data.questions[i]);
+                            await selectAnswerByLetterPAT(page, i, letter);
+                        }
+                    } else {
+                        console.log('\n⚠ IA non configurée, sélection aléatoire...');
+                        for (let i = 0; i < data.questions.length; i++) {
+                            const randomLetter = ['A', 'B', 'C', 'D'][Math.floor(Math.random() * 4)];
+                            await selectAnswerByLetterPAT(page, i, randomLetter);
+                        }
                     }
 
                     // Valider les réponses
@@ -259,11 +284,16 @@ async function runAutomation() {
                     // Attendre un temps aléatoire pour simuler la réflexion
                     await waitRandomTime(page, WAIT_ENABLED, WAIT_MIN_EXTRA, WAIT_MAX_EXTRA);
 
-                    // TODO: Implémenter la logique pour trouver les bonnes réponses
-                    // Pour l'instant, on sélectionne une réponse aléatoire
-                    console.log('\n⚠ Sélection de réponse aléatoire (à remplacer par IA)...');
-                    const randomLetter = ['A', 'B', 'C', 'D'][Math.floor(Math.random() * 4)];
-                    await selectAnswerByLetterTAC(page, randomLetter);
+                    // Sélectionner la réponse avec l'IA ou aléatoirement
+                    let selectedLetter;
+                    if (isAIConfigured()) {
+                        console.log('\n🧠 Sélection de la réponse avec l\'IA...');
+                        selectedLetter = await getAIAnswerForTextCompletion(data.texte, question);
+                    } else {
+                        console.log('\n⚠ IA non configurée, sélection aléatoire...');
+                        selectedLetter = ['A', 'B', 'C', 'D'][Math.floor(Math.random() * 4)];
+                    }
+                    await selectAnswerByLetterTAC(page, selectedLetter);
 
                     // Cliquer sur le bouton suivant (Passer/Valider/Terminer)
                     const buttonResult = await clickNextButton(page);
