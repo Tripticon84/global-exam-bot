@@ -21,6 +21,8 @@ Bot d'automatisation pour compléter les exercices sur GlobalExam (TOEIC).
 - ✅ Exécution par section (une section par lancement)
 - ✅ Résumé de session à la fin
 - ✅ **Intégration IA** (ChatGPT / Gemini) pour sélectionner les bonnes réponses
+  - Requêtes batch (un seul appel API pour toutes les questions d'un exercice)
+  - Fallback automatique en réponse aléatoire si erreur API
 
 ## 🚀 Installation
 
@@ -143,4 +145,4 @@ const SECTIONS_TO_SKIP = [
 
 ## 📝 TODO
 
-- [ ] Améliorer la précision de l'IA avec des prompts plus spécifiques
+- [ ] Support de l'analyse d'images pour les exercices Photographie (vision API)
