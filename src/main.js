@@ -5,7 +5,7 @@ import { detectExerciceType } from './exercices/exercices-types.js';
 import { solveConversation, selectAnswerByLetter, validateAnswers, getProgress, waitBasedOnAudio } from './exercices/conversation.js';
 import { solvePhrasesATrous, selectAnswerByLetter as selectAnswerByLetterPAT, validateAnswers as validateAnswersPAT, getProgress as getProgressPAT, } from './exercices/phrases-a-troue.js';
 import { solveTextesACompleter, getCurrentQuestion, selectAnswerByLetter as selectAnswerByLetterTAC, clickNextButton, getProgress as getProgressTAC } from './exercices/textes-a-completer.js';
-import { isAIConfigured, getAIAnswerForConversation, getAIAnswerForFillInTheBlank, getAIAnswerForTextCompletion } from './ai/ai-provider.js';
+import { isAIConfigured, getAIAnswersForConversationBatch, getAIAnswersForFillInTheBlankBatch, getAIAnswerForTextCompletion } from './ai/ai-provider.js';
 
 dotenv.config();
 
@@ -177,10 +177,10 @@ async function runAutomation() {
                     // Sélectionner les réponses avec l'IA ou aléatoirement
                     // Pour Photograph, pas d'IA (inutile car pas de texte)
                     if (isAIConfigured()) {
-                        console.log('\n🧠 Sélection des réponses avec l\'IA...');
+                        console.log('\n🧠 Sélection des réponses avec l\'IA (batch)...');
+                        const letters = await getAIAnswersForConversationBatch(data.transcription, data.questions);
                         for (let i = 0; i < data.questions.length; i++) {
-                            const letter = await getAIAnswerForConversation(data.transcription, data.questions[i]);
-                            await selectAnswerByLetter(page, i, letter);
+                            await selectAnswerByLetter(page, i, letters[i]);
                         }
                     } else {
                         console.log('\n🎲 Sélection aléatoire...');
@@ -230,10 +230,10 @@ async function runAutomation() {
 
                     // Sélectionner les réponses avec l'IA ou aléatoirement
                     if (isAIConfigured()) {
-                        console.log('\n🧠 Sélection des réponses avec l\'IA...');
+                        console.log('\n🧠 Sélection des réponses avec l\'IA (batch)...');
+                        const letters = await getAIAnswersForFillInTheBlankBatch(data.questions);
                         for (let i = 0; i < data.questions.length; i++) {
-                            const letter = await getAIAnswerForFillInTheBlank(data.questions[i]);
-                            await selectAnswerByLetterPAT(page, i, letter);
+                            await selectAnswerByLetterPAT(page, i, letters[i]);
                         }
                     } else {
                         console.log('\n⚠ IA non configurée, sélection aléatoire...');

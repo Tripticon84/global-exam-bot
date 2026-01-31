@@ -64,9 +64,6 @@ WAIT_BASE_TIMER=15000
 ```bash
 # Lancer le bot
 npm start
-
-# Ou en mode développement (avec rechargement automatique)
-npm run dev
 ```
 
 Le bot va :

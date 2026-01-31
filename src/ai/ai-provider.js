@@ -143,101 +143,137 @@ export function extractAnswerLetter(response) {
 }
 
 /**
- * Génère un prompt pour un exercice de type Conversation/Monologue
+ * Génère un prompt pour un exercice de type Conversation/Monologue avec TOUTES les questions
  * @param {string} transcription - La transcription de l'audio
- * @param {Object} question - Les données de la question
+ * @param {Array} questions - Les données de toutes les questions
  * @returns {string} Le prompt formaté
  */
-export function generateConversationPrompt(transcription, question) {
-    let prompt = `Voici une transcription d'une conversation/monologue en anglais:\n\n`;
-    prompt += `"${transcription}"\n\n`;
-    prompt += `Question: ${question.texte}\n\n`;
-    prompt += `Réponses possibles:\n`;
+export function generateConversationPromptBatch(transcription, questions) {
+    let prompt = `TOEIC Listening - Conversation/Monologue\n\n`;
+    prompt += `Transcription:\n"${transcription}"\n\n`;
+    prompt += `Tu dois répondre à ${questions.length} question(s). Pour chaque question, donne UNIQUEMENT la lettre de la bonne réponse.\n\n`;
 
-    question.reponses.forEach(r => {
-        prompt += `${r.lettre} ${r.texte}\n`;
+    questions.forEach((question, index) => {
+        prompt += `--- Question ${index + 1} ---\n`;
+        prompt += `${question.texte || question.numero}\n`;
+        prompt += `Choix:\n`;
+        question.reponses.forEach(r => {
+            const lettre = r.lettre.replace('.', '');
+            prompt += `  ${lettre}: ${r.texte}\n`;
+        });
+        prompt += `\n`;
     });
 
-    prompt += `\nQuelle est la bonne réponse? Réponds UNIQUEMENT par la lettre (A, B, C ou D).`;
+    prompt += `Réponds avec UNIQUEMENT les lettres dans l'ordre, séparées par des virgules. Exemple: A,B,C,D`;
 
     return prompt;
 }
 
 /**
- * Génère un prompt pour un exercice de type Phrases à trous
- * @param {Object} question - Les données de la question
+ * Génère un prompt pour un exercice de type Phrases à trous avec TOUTES les questions
+ * @param {Array} questions - Les données de toutes les questions
  * @returns {string} Le prompt formaté
  */
-export function generateFillInTheBlankPrompt(question) {
-    let prompt = `Voici une phrase à trous en anglais (TOEIC Reading Part 5):\n\n`;
-    prompt += `"${question.texte}"\n\n`;
-    prompt += `Réponses possibles:\n`;
+export function generateFillInTheBlankPromptBatch(questions) {
+    let prompt = `TOEIC Reading Part 5 - Phrases à trous\n\n`;
+    prompt += `Tu dois répondre à ${questions.length} question(s). Pour chaque phrase, choisis le mot qui complète correctement la phrase.\n\n`;
 
-    question.reponses.forEach(r => {
-        prompt += `${r.lettre} ${r.texte}\n`;
+    questions.forEach((question, index) => {
+        prompt += `--- Question ${index + 1} ---\n`;
+        prompt += `Phrase: "${question.texte}"\n`;
+        prompt += `Choix:\n`;
+        question.reponses.forEach(r => {
+            const lettre = r.lettre.replace('.', '');
+            prompt += `  ${lettre}: ${r.texte}\n`;
+        });
+        prompt += `\n`;
     });
 
-    prompt += `\nQuelle est la bonne réponse pour compléter la phrase? Réponds UNIQUEMENT par la lettre (A, B, C ou D).`;
+    prompt += `Réponds avec UNIQUEMENT les lettres dans l'ordre, séparées par des virgules. Exemple: A,B,C,D`;
 
     return prompt;
 }
 
 /**
- * Génère un prompt pour un exercice de type Textes à compléter
+ * Génère un prompt pour un exercice de type Textes à compléter (une seule question)
  * @param {string} texte - Le texte support
  * @param {Object} question - Les données de la question
  * @returns {string} Le prompt formaté
  */
 export function generateTextCompletionPrompt(texte, question) {
-    let prompt = `Voici un texte en anglais (TOEIC Reading Part 6):\n\n`;
-    prompt += `"${texte}"\n\n`;
-    prompt += `Question: ${question.texte}\n\n`;
-    prompt += `Réponses possibles:\n`;
+    let prompt = `TOEIC Reading Part 6/7 - Texte à compléter\n\n`;
+    prompt += `Texte:\n"${texte}"\n\n`;
+    prompt += `Question: ${question.texte || question.numero}\n`;
+    prompt += `Choix:\n`;
 
     question.reponses.forEach(r => {
-        prompt += `${r.lettre} ${r.texte}\n`;
+        const lettre = r.lettre.replace('.', '');
+        prompt += `  ${lettre}: ${r.texte}\n`;
     });
 
-    prompt += `\nQuelle est la bonne réponse pour compléter le texte? Réponds UNIQUEMENT par la lettre (A, B, C ou D).`;
+    prompt += `\nRéponds avec UNIQUEMENT la lettre de la bonne réponse (A, B, C ou D).`;
 
     return prompt;
 }
 
 /**
- * Obtient la réponse IA pour une question de conversation/monologue
- * @param {string} transcription - La transcription
- * @param {Object} question - La question
- * @returns {Promise<string>} La lettre de réponse
+ * Parse une réponse IA contenant plusieurs lettres (ex: "A,B,C,D" ou "A, B, C, D")
+ * @param {string} response - La réponse de l'IA
+ * @param {number} expectedCount - Le nombre de réponses attendues
+ * @returns {string[]} Les lettres extraites
  */
-export async function getAIAnswerForConversation(transcription, question) {
-    const prompt = generateConversationPrompt(transcription, question);
-    const response = await callAI(prompt);
-    const letter = extractAnswerLetter(response);
+export function parseMultipleAnswers(response, expectedCount) {
+    // Nettoyer la réponse
+    const cleaned = response.toUpperCase().replace(/[^ABCD,\s]/g, '');
 
-    if (!letter) {
-        console.warn('⚠ Impossible d\'extraire la lettre, réponse aléatoire...');
-        return ['A', 'B', 'C', 'D'][Math.floor(Math.random() * 4)];
+    // Essayer de parser avec virgules
+    let letters = cleaned.split(/[,\s]+/).filter(l => /^[ABCD]$/.test(l));
+
+    // Si pas assez de lettres, essayer de prendre toutes les lettres dans l'ordre
+    if (letters.length < expectedCount) {
+        const allLetters = response.toUpperCase().match(/[ABCD]/g) || [];
+        letters = allLetters.slice(0, expectedCount);
     }
 
-    return letter;
+    // Si toujours pas assez, compléter avec des réponses aléatoires
+    while (letters.length < expectedCount) {
+        letters.push(['A', 'B', 'C', 'D'][Math.floor(Math.random() * 4)]);
+    }
+
+    return letters.slice(0, expectedCount);
 }
 
 /**
- * Obtient la réponse IA pour une question de phrases à trous
- * @param {Object} question - La question
- * @returns {Promise<string>} La lettre de réponse
+ * Obtient les réponses IA pour TOUTES les questions de conversation/monologue en une seule requête
+ * @param {string} transcription - La transcription
+ * @param {Array} questions - Toutes les questions
+ * @returns {Promise<string[]>} Les lettres de réponse pour chaque question
  */
-export async function getAIAnswerForFillInTheBlank(question) {
-    const prompt = generateFillInTheBlankPrompt(question);
+export async function getAIAnswersForConversationBatch(transcription, questions) {
+    const prompt = generateConversationPromptBatch(transcription, questions);
+    console.log('\n📤 Prompt envoyé à l\'IA:\n', prompt.substring(0, 500) + '...\n');
+
     const response = await callAI(prompt);
-    const letter = extractAnswerLetter(response);
+    const letters = parseMultipleAnswers(response, questions.length);
 
-    if (!letter) {
-        console.warn('⚠ Impossible d\'extraire la lettre, réponse aléatoire...');
-        return ['A', 'B', 'C', 'D'][Math.floor(Math.random() * 4)];
-    }
+    console.log(`✓ Réponses parsées: ${letters.join(', ')}`);
+    return letters;
+}
 
-    return letter;
+/**
+ * Obtient les réponses IA pour TOUTES les questions de phrases à trous en une seule requête
+ * @param {Array} questions - Toutes les questions
+ * @returns {Promise<string[]>} Les lettres de réponse pour chaque question
+ */
+export async function getAIAnswersForFillInTheBlankBatch(questions) {
+    const prompt = generateFillInTheBlankPromptBatch(questions);
+    console.log('\n📤 Prompt envoyé à l\'IA:\n', prompt.substring(0, 500) + '...\n');
+
+    const response = await callAI(prompt);
+    const letters = parseMultipleAnswers(response, questions.length);
+
+    console.log(`✓ Réponses parsées: ${letters.join(', ')}`);
+    return letters;
 }
 
 /**
