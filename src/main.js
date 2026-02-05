@@ -1,5 +1,6 @@
 import { chromium } from 'playwright';
 import dotenv from 'dotenv';
+import readline from 'readline';
 import { getAllExos, printExosSummary, getExercisesToDo } from './gets/get-all-exos.js';
 import { detectExerciceType } from './exercices/exercices-types.js';
 import { solveConversation, selectAnswerByLetter, validateAnswers, getProgress, waitBasedOnAudio } from './exercices/conversation.js';
@@ -16,6 +17,40 @@ const WAIT_MAX_EXTRA = parseInt(process.env.WAIT_MAX_EXTRA) || 8000;
 
 // Sections à ignorer
 const SECTIONS_TO_SKIP = ['pm-55094', 'pm-55095', 'pm-55098', 'pm-55101', 'pm-55102'];
+
+/**
+ * Pose une question à l'utilisateur dans le terminal
+ * @param {string} question - La question à poser
+ * @returns {Promise<string>} La réponse de l'utilisateur
+ */
+function askUser(question) {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    return new Promise(resolve => {
+        rl.question(question, answer => {
+            rl.close();
+            resolve(answer.trim());
+        });
+    });
+}
+
+/**
+ * Parse les arguments CLI pour déterminer le mode d'exécution
+ * --section : section entière (défaut)
+ * --count N ou -n N : N exercices
+ * @returns {{ mode: 'section'|'count', count?: number }}
+ */
+function parseArgs() {
+    const args = process.argv.slice(2);
+    for (let i = 0; i < args.length; i++) {
+        if ((args[i] === '--count' || args[i] === '-n') && args[i + 1]) {
+            const n = parseInt(args[i + 1]);
+            if (!isNaN(n) && n > 0) return { mode: 'count', count: n };
+        }
+        if (args[i] === '--section' || args[i] === '-s') return { mode: 'section' };
+    }
+    // Pas d'argument → mode interactif (prompt)
+    return { mode: 'interactive' };
+}
 
 /**
  * Attend un temps aléatoire entre chaque validation (simule la réflexion)
@@ -105,19 +140,60 @@ async function runAutomation() {
             exercisesBySection[exo.sectionId].push(exo);
         });
 
-        // Prendre uniquement la première section disponible
-        const firstSectionId = Object.keys(exercisesBySection)[0];
-        const currentSectionExercises = exercisesBySection[firstSectionId];
-        const currentSectionName = currentSectionExercises[0].section;
+        // Déterminer le mode d'exécution
+        let runConfig = parseArgs();
 
-        console.log(`\n🎯 Section en cours: ${currentSectionName} (${currentSectionExercises.length} exercices)`);
+        if (runConfig.mode === 'interactive') {
+            console.log('\n========== MODE D\'EXÉCUTION ==========');
+            console.log('  1. Section entière (première section disponible)');
+            console.log('  2. Un seul exercice');
+            console.log('  3. Un nombre précis d\'exercices');
+            const choice = await askUser('\nVotre choix (1/2/3) : ');
+
+            if (choice === '2') {
+                runConfig = { mode: 'count', count: 1 };
+            } else if (choice === '3') {
+                const countStr = await askUser('Combien d\'exercices ? : ');
+                const count = parseInt(countStr);
+                if (isNaN(count) || count < 1) {
+                    console.log('⚠ Nombre invalide, mode section entière par défaut.');
+                    runConfig = { mode: 'section' };
+                } else {
+                    runConfig = { mode: 'count', count };
+                }
+            } else {
+                runConfig = { mode: 'section' };
+            }
+        }
+
+        // Sélectionner les exercices à faire selon le mode
+        let selectedExercises;
+        let sessionLabel;
+
+        if (runConfig.mode === 'count') {
+            // Prendre les N premiers exercices (tous sections confondues)
+            selectedExercises = exercisesToDo.slice(0, runConfig.count);
+            sessionLabel = runConfig.count === 1
+                ? `1 exercice`
+                : `${runConfig.count} exercice(s)`;
+        } else {
+            // Mode section : prendre la première section complète
+            const firstSectionId = Object.keys(exercisesBySection)[0];
+            selectedExercises = exercisesBySection[firstSectionId];
+            sessionLabel = `Section "${selectedExercises[0].section}"`;
+        }
+
+        console.log(`\n🎯 Mode: ${sessionLabel} (${selectedExercises.length} exercice(s))`);
+        selectedExercises.forEach((exo, i) => {
+            console.log(`  ${i + 1}. [${exo.section}] ${exo.nom}`);
+        });
 
         // Statistiques pour le résumé
         let exercicesCompletes = 0;
         let exercicesEchoues = 0;
 
-        // Faire une boucle sur les exercices de la section courante
-        for (const exo of currentSectionExercises) {
+        // Faire une boucle sur les exercices sélectionnés
+        for (const exo of selectedExercises) {
             console.log(`\n--- Démarrage de l'exercice: [${exo.section}] ${exo.nom} ---`);
 
             // Sélectionner la div qui contient les boutons d'exercices
@@ -333,12 +409,12 @@ async function runAutomation() {
             await page.waitForURL(exosPageUrl);
         }
 
-        // Afficher le résumé de la section
+        // Afficher le résumé de la session
         console.log('\n========================================');
         console.log('📊 RÉSUMÉ DE LA SESSION');
         console.log('========================================');
-        console.log(`Section: ${currentSectionName}`);
-        console.log(`Exercices complétés: ${exercicesCompletes}/${currentSectionExercises.length}`);
+        console.log(`Mode: ${sessionLabel}`);
+        console.log(`Exercices complétés: ${exercicesCompletes}/${selectedExercises.length}`);
         if (exercicesEchoues > 0) {
             console.log(`Exercices échoués/non supportés: ${exercicesEchoues}`);
         }

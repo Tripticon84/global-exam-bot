@@ -1,14 +1,13 @@
 {
   "name": "global-exam-bot",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "",
   "main": "src/main.js",
   "scripts": {
-    "start": "node src/main.js"
+    "start": "node src/main.js",
+    "start:section": "node src/main.js --section",
+    "start:one": "node src/main.js --count 1"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
   "type": "module",
   "dependencies": {
     "dotenv": "^17.2.3",
