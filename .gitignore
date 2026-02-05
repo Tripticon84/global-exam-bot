@@ -6,3 +6,8 @@ node_modules/
 /playwright/.cache/
 /playwright/.auth/
 .env
+
+# Lock files
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
