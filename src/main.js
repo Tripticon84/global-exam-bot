@@ -223,7 +223,7 @@ async function runAutomation() {
             console.log('Type d\'exercice détecté:', exerciceType ? exerciceType.label : 'Inconnu');
 
             // Résoudre l'exercice selon son type
-            if (exerciceType && exerciceType.type === 'Conversation' || exerciceType.type === 'Monologue' || exerciceType.type === 'QuestionResponse' || exerciceType.type === 'Photograph') {
+            if (exerciceType && ['Conversation', 'Monologue', 'QuestionResponse', 'Photograph'].includes(exerciceType.type)) {
                 // Boucle pour résoudre toutes les étapes de l'exercice
                 let isExerciseComplete = false;
 
@@ -237,11 +237,23 @@ async function runAutomation() {
 
 
                 while (!isExerciseComplete) {
+                    // Vérifier si on est sur la page de résultat AVANT de tenter de résoudre
+                    const currentUrlCheck = page.url();
+                    if (currentUrlCheck.includes('/result') || !currentUrlCheck.includes('/training/activity')) {
+                        isExerciseComplete = true;
+                        console.log('✅ Exercice terminé (page de résultat détectée)');
+                        break;
+                    }
+
                     // Récupérer les données de l'exercice (transcription + questions)
                     const data = await solveConversation(page);
 
                     console.log('\n📝 Transcription:');
-                    console.log(data.transcription);
+                    if (data.transcription && data.transcription.trim()) {
+                        console.log(data.transcription);
+                    } else {
+                        console.log('(vide)');
+                    }
 
                     // Afficher la progression
                     const progress = await getProgress(page);
@@ -286,7 +298,7 @@ async function runAutomation() {
                     } else {
                         // Vérifier si les questions ont changé
                         const newProgress = await getProgress(page);
-                        if (newProgress.current === progress.total) {
+                        if (newProgress.isResultPage || newProgress.current >= newProgress.total) {
                             isExerciseComplete = true;
                             console.log('✅ Exercice terminé!');
                         }
@@ -300,6 +312,14 @@ async function runAutomation() {
                 let isExerciseComplete = false;
 
                 while (!isExerciseComplete) {
+                    // Vérifier si on est sur la page de résultat AVANT de tenter de résoudre
+                    const currentUrlCheckPAT = page.url();
+                    if (currentUrlCheckPAT.includes('/result') || !currentUrlCheckPAT.includes('/training/activity')) {
+                        isExerciseComplete = true;
+                        console.log('✅ Exercice terminé (page de résultat détectée)');
+                        break;
+                    }
+
                     // Récupérer les données de l'exercice (questions)
                     const data = await solvePhrasesATrous(page);
 
@@ -339,7 +359,7 @@ async function runAutomation() {
                     } else {
                         // Vérifier si les questions ont changé
                         const newProgress = await getProgressPAT(page);
-                        if (newProgress.current === progress.total) {
+                        if (newProgress.current >= newProgress.total) {
                             isExerciseComplete = true;
                             console.log('✅ Exercice terminé!');
                         }
@@ -356,6 +376,14 @@ async function runAutomation() {
                 const data = await solveTextesACompleter(page);
 
                 while (!isExerciseComplete) {
+                    // Vérifier si on est sur la page de résultat AVANT de tenter de résoudre
+                    const currentUrlCheckTAC = page.url();
+                    if (currentUrlCheckTAC.includes('/result') || !currentUrlCheckTAC.includes('/training/activity')) {
+                        isExerciseComplete = true;
+                        console.log('✅ Exercice terminé (page de résultat détectée)');
+                        break;
+                    }
+
                     // Récupérer la question courante
                     const question = await getCurrentQuestion(page);
 

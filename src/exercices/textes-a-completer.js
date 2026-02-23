@@ -8,11 +8,11 @@ export async function solveTextesACompleter(page) {
     await clickStartButtonIfPresent(page);
 
     // Attendre que la page soit chargée
-    await page.waitForSelector('[data-testid^="question-"]', { timeout: 10000 });
+    await page.waitForSelector('[data-testid^="question-"], #question-wrapper', { timeout: 15000 });
 
     // Récupérer le texte support
     const texteSupport = await page.evaluate(() => {
-        const supportElement = document.querySelector('#supports .wysiwyg');
+        const supportElement = document.querySelector('#supports .wysiwyg, #supports, #question-test > div:first-child .bullet-list, #question-test > div:first-child');
         return supportElement?.innerText?.trim() || '';
     });
 
@@ -36,17 +36,19 @@ export async function solveTextesACompleter(page) {
  */
 export async function getCurrentQuestion(page) {
     const questionData = await page.evaluate(() => {
-        // Trouver la question visible (celle qui n'a pas la classe "hidden")
-        const allQuestions = document.querySelectorAll('[data-testid^="question-"]');
-        let visibleQuestion = null;
-        let visibleIndex = -1;
+        // Trouver la question visible (ancien DOM + nouveau DOM)
+        const allQuestions = Array.from(document.querySelectorAll('[data-testid^="question-"]'));
+        let visibleQuestion = allQuestions.find((el) => !el.classList.contains('hidden')) || null;
 
-        for (let i = 0; i < allQuestions.length; i++) {
-            if (!allQuestions[i].classList.contains('hidden')) {
-                visibleQuestion = allQuestions[i];
-                visibleIndex = i;
-                break;
-            }
+        if (!visibleQuestion) {
+            visibleQuestion = document.querySelector('#question-wrapper');
+        }
+
+        let visibleIndex = allQuestions.indexOf(visibleQuestion);
+        if (visibleIndex < 0) {
+            const pageIndicator = document.querySelector('[data-testid="page-indicator"]');
+            const indicatorMatch = pageIndicator?.textContent?.match(/(\d+)\s*\/\s*(\d+)/);
+            visibleIndex = indicatorMatch ? Math.max(parseInt(indicatorMatch[1], 10) - 1, 0) : 0;
         }
 
         if (!visibleQuestion) {
@@ -61,17 +63,21 @@ export async function getCurrentQuestion(page) {
         };
 
         // Numéro de la question
-        const numeroElement = visibleQuestion.querySelector('.font-bold.text-size-20');
+        const numeroElement = visibleQuestion.querySelector('[data-testid="question-number"], .font-bold.text-size-20');
         data.numero = numeroElement?.textContent?.trim() || `Question ${visibleIndex + 1}`;
 
         // Texte de la question
-        const texteElement = visibleQuestion.querySelector('.text-neutral-80.leading-tight.mb-8 p, .text-neutral-80.leading-tight.mb-8');
+        const texteElement = visibleQuestion.querySelector('[data-testid="question-text"], #question-header h2, #question-header p, .text-neutral-80.leading-tight.mb-8 p, .text-neutral-80.leading-tight.mb-8');
         data.texte = texteElement?.innerText?.trim() || '';
 
         // Réponses possibles
-        const answerLabels = visibleQuestion.querySelectorAll('[data-testid^="exam-answer-"]');
+        const answerLabels = visibleQuestion.querySelectorAll('[data-testid^="exam-answer-"], #question-content label[for], #question-content label, label[for^="radio-"]');
         answerLabels.forEach((label, answerIndex) => {
-            const input = label.querySelector('input[type="radio"]');
+            const labelElement = label.matches('label') ? label : (label.querySelector('label') || label);
+            const labelFor = labelElement.getAttribute('for');
+            const input = labelFor
+                ? document.getElementById(labelFor)
+                : labelElement.querySelector('input[type="radio"]');
 
             let lettre = '';
             let texte = '';
@@ -106,7 +112,7 @@ export async function getCurrentQuestion(page) {
 
             // Méthode 3: parser tout le texte du label
             if (!texte) {
-                const fullText = label.textContent?.trim() || '';
+                const fullText = labelElement.textContent?.trim() || '';
                 const match = fullText.match(/^([A-D]\.?)\s*(.*)$/);
                 if (match) {
                     lettre = match[1];
@@ -126,7 +132,9 @@ export async function getCurrentQuestion(page) {
                 lettre: lettre,
                 texte: texte,
                 value: input?.value || '',
-                selector: `[data-testid="question-${visibleIndex}"] [data-testid="exam-answer-${answerIndex + 1}"]`
+                selector: labelFor
+                    ? `label[for="${labelFor}"]`
+                    : `[data-testid="question-${visibleIndex}"] [data-testid="exam-answer-${answerIndex + 1}"]`
             });
         });
 
@@ -149,17 +157,25 @@ export async function getCurrentQuestion(page) {
  * @param {number} answerIndex - L'index de la réponse (0-based, 0=A, 1=B, 2=C, 3=D)
  */
 export async function selectAnswer(page, answerIndex) {
-    // Trouver la question visible
+    const currentQuestion = page.locator('#question-wrapper, [data-testid^="question-"]').first();
+
+    // Nouveau DOM: labels radio dans #question-content
+    const labelOptions = currentQuestion.locator('#question-content label[for], #question-content label, label[for^="radio-"]');
+    const labelCount = await labelOptions.count();
+    if (labelCount > answerIndex) {
+        await labelOptions.nth(answerIndex).click({ force: true });
+        console.log(`✓ Réponse ${answerIndex + 1} sélectionnée`);
+        return;
+    }
+
+    // Ancien DOM fallback
     const visibleQuestionIndex = await page.evaluate(() => {
         const allQuestions = document.querySelectorAll('[data-testid^="question-"]');
         for (let i = 0; i < allQuestions.length; i++) {
-            if (!allQuestions[i].classList.contains('hidden')) {
-                return i;
-            }
+            if (!allQuestions[i].classList.contains('hidden')) return i;
         }
         return 0;
     });
-
     const selector = `[data-testid="question-${visibleQuestionIndex}"] [data-testid="exam-answer-${answerIndex + 1}"]`;
     await page.click(selector);
     console.log(`✓ Réponse ${answerIndex + 1} sélectionnée pour la question ${visibleQuestionIndex + 1}`);
@@ -265,8 +281,8 @@ export async function clickStartButtonIfPresent(page) {
  * @returns {Promise<boolean>}
  */
 export async function isTextesACompleterExercise(page) {
-    const hasQuestions = await page.$('[data-testid^="question-"]');
-    const hasSupports = await page.$('#supports');
+    const hasQuestions = await page.$('[data-testid^="question-"], #question-wrapper');
+    const hasSupports = await page.$('#supports, #question-test .bullet-list');
     const isReading = await page.evaluate(() => {
         const sectionImg = document.querySelector('img[src*="reading"]');
         return !!sectionImg;
