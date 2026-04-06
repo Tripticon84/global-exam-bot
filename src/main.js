@@ -131,8 +131,11 @@ async function handleRecapPage(page, shouldContinue, exosPageUrl) {
 }
 
 async function runAutomation() {
-    const browser = await chromium.launch({ headless: false });
-    const page = await browser.newPage();
+    const browser = await chromium.launch({
+        headless: process.env.BROWSER_HEADLESS === true,
+        args: ['--window-size=' + process.env.BROWSER_WIDTH + ',' + process.env.BROWSER_HEIGHT]
+    });
+    const page = await browser.newPage({ viewport: null });
 
     try {
 
@@ -259,27 +262,27 @@ async function runAutomation() {
             // Pour le premier exercice, naviguer depuis la liste
             // Pour les suivants, on y arrive via "Activité suivante"
             if (i === 0) {
-            // Sélectionner la div qui contient les boutons d'exercices
-            const sectionHeader = await page.$(`#${exo.sectionId}`);
-            if (!sectionHeader) {
-                console.error(`Section ${exo.sectionId} non trouvée`);
-                continue;
-            }
+                // Sélectionner la div qui contient les boutons d'exercices
+                const sectionHeader = await page.$(`#${exo.sectionId}`);
+                if (!sectionHeader) {
+                    console.error(`Section ${exo.sectionId} non trouvée`);
+                    continue;
+                }
 
-            // Récupérer la grille d'exercices (nextElementSibling)
-            const exercisesGrid = await sectionHeader.evaluateHandle(el => el.nextElementSibling);
-            const buttons = await exercisesGrid.$$('button');
+                // Récupérer la grille d'exercices (nextElementSibling)
+                const exercisesGrid = await sectionHeader.evaluateHandle(el => el.nextElementSibling);
+                const buttons = await exercisesGrid.$$('button');
 
-            // Cliquer sur le bouton à l'index correspondant (index - 1 car l'index est 1-based)
-            if (exo.index > 0 && exo.index <= buttons.length) {
-                await buttons[exo.index - 1].click();
-                console.log(`Exercice cliqué: ${exo.nom}`);
-            } else {
-                console.error(`Index d'exercice ${exo.index} invalide pour la section ${exo.sectionId}`);
-            }
+                // Cliquer sur le bouton à l'index correspondant (index - 1 car l'index est 1-based)
+                if (exo.index > 0 && exo.index <= buttons.length) {
+                    await buttons[exo.index - 1].click();
+                    console.log(`Exercice cliqué: ${exo.nom}`);
+                } else {
+                    console.error(`Index d'exercice ${exo.index} invalide pour la section ${exo.sectionId}`);
+                }
 
-            // Attendre que la nouvelle page soit chargée
-            await page.waitForURL(/https:\/\/exam\.global-exam\.com\/training\/activity.*/);
+                // Attendre que la nouvelle page soit chargée
+                await page.waitForURL(/https:\/\/exam\.global-exam\.com\/training\/activity.*/);
             } // fin if (i === 0)
 
             // Détection du type d'exercice

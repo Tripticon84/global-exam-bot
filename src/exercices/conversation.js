@@ -504,21 +504,26 @@ async function safeWaitForTimeout(page, timeoutMs, label) {
  * @param {import('playwright').Page} page - La page Playwright
  */
 export async function validateAnswers(page) {
-    const validateBtn = await page.$('button:has-text("Valider"), button:has-text("Suivant"), button:has-text("Continuer"), button:has-text("Confirm"), button:has-text("Next")');
-    const FinishBtn = await page.$('button:has-text("Terminer"), button:has-text("Finish")');
+    const validateSelector = 'button:has-text("Valider"), button:has-text("Suivant"), button:has-text("Continuer"), button:has-text("Confirm"), button:has-text("Next")';
+    const finishSelector = 'button:has-text("Terminer"), button:has-text("Finish")';
+
+    const FinishBtn = await page.$(finishSelector);
     if (FinishBtn) {
         await FinishBtn.click();
         console.log('✓ Exercice terminé');
         // Attendre que la page de résumé s'affiche
         await safeWaitForTimeout(page, 1000, 'resume');
+        return;
     }
+
+    const validateBtn = await page.$(validateSelector);
     if (validateBtn) {
         await validateBtn.click();
-        console.log('✓ Réponses validées');
+        console.log('✓ Réponses validées / Suivant');
         // Attendre que les nouvelles questions se chargent
         await safeWaitForTimeout(page, 1000, 'validation');
     } else {
-        console.error('✗ Bouton Valider non trouvé');
+        console.error('✗ Bouton Valider/Suivant non trouvé');
     }
 }
 
