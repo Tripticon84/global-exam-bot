@@ -72,6 +72,64 @@ async function waitRandomTime(page, waitEnabled = true, minWait = 9000, maxWait 
     console.log('✓ Attente terminée');
 }
 
+/**
+ * Vérifie si la page de récapitulatif de fin d'exercice est affichée
+ * @param {import('playwright').Page} page - La page Playwright
+ * @returns {Promise<boolean>} true si la page de récapitulatif est détectée
+ */
+async function isRecapPage(page) {
+    const recapElement = await page.$('[data-testid="your-grade"]');
+    return !!recapElement;
+}
+
+/**
+ * Gère la page de récapitulatif de fin d'exercice.
+ * Si shouldContinue est true, clique sur "Activité suivante" pour enchaîner.
+ * Sinon, retourne à la liste des exercices.
+ * @param {import('playwright').Page} page - La page Playwright
+ * @param {boolean} shouldContinue - true pour cliquer sur "Activité suivante"
+ * @param {string} exosPageUrl - URL de la liste des exercices (fallback)
+ */
+async function handleRecapPage(page, shouldContinue, exosPageUrl) {
+    try {
+        // Attendre que la page de récapitulatif apparaisse
+        await page.waitForSelector('[data-testid="your-grade"]', { timeout: 15000 });
+        console.log('📋 Page de récapitulatif détectée');
+
+        // Extraire le score
+        const score = await page.$eval('[data-testid="your-grade"]', el => el.textContent.trim()).catch(() => null);
+        if (score) {
+            console.log(`📊 Score: ${score}`);
+        }
+
+        if (shouldContinue) {
+            // Cliquer sur "Activité suivante" pour enchaîner
+            const nextButton = await page.$('button:has-text("Activité suivante")');
+            if (nextButton) {
+                console.log('➡️ Passage à l\'activité suivante...');
+                await nextButton.click();
+                // Attendre que la nouvelle activité se charge
+                await page.waitForURL(/https:\/\/exam\.global-exam\.com\/training\/activity.*/, { timeout: 15000 });
+                console.log('✅ Nouvelle activité chargée');
+            } else {
+                console.log('⚠ Bouton "Activité suivante" non trouvé, retour à la liste...');
+                await page.goto(exosPageUrl);
+                await page.waitForURL(exosPageUrl);
+            }
+        } else {
+            // Dernier exercice ou exercice unique : retour à la liste
+            console.log('🔙 Retour à la liste des exercices...');
+            await page.goto(exosPageUrl);
+            await page.waitForURL(exosPageUrl);
+        }
+    } catch (e) {
+        // Page de récapitulatif non détectée, fallback vers la liste
+        console.log('⚠ Page de récapitulatif non détectée, retour à la liste...');
+        await page.goto(exosPageUrl);
+        await page.waitForURL(exosPageUrl);
+    }
+}
+
 async function runAutomation() {
     const browser = await chromium.launch({ headless: false });
     const page = await browser.newPage();
@@ -193,9 +251,14 @@ async function runAutomation() {
         let exercicesEchoues = 0;
 
         // Faire une boucle sur les exercices sélectionnés
-        for (const exo of selectedExercises) {
-            console.log(`\n--- Démarrage de l'exercice: [${exo.section}] ${exo.nom} ---`);
+        for (let i = 0; i < selectedExercises.length; i++) {
+            const exo = selectedExercises[i];
+            const isLastExercise = i === selectedExercises.length - 1;
+            console.log(`\n--- Démarrage de l'exercice ${i + 1}/${selectedExercises.length}: [${exo.section}] ${exo.nom} ---`);
 
+            // Pour le premier exercice, naviguer depuis la liste
+            // Pour les suivants, on y arrive via "Activité suivante"
+            if (i === 0) {
             // Sélectionner la div qui contient les boutons d'exercices
             const sectionHeader = await page.$(`#${exo.sectionId}`);
             if (!sectionHeader) {
@@ -217,6 +280,7 @@ async function runAutomation() {
 
             // Attendre que la nouvelle page soit chargée
             await page.waitForURL(/https:\/\/exam\.global-exam\.com\/training\/activity.*/);
+            } // fin if (i === 0)
 
             // Détection du type d'exercice
             const exerciceType = await detectExerciceType(exo);
@@ -237,11 +301,16 @@ async function runAutomation() {
 
 
                 while (!isExerciseComplete) {
-                    // Vérifier si on est sur la page de résultat AVANT de tenter de résoudre
+                    // Vérifier si on est sur la page de résultat ou récapitulatif AVANT de tenter de résoudre
                     const currentUrlCheck = page.url();
                     if (currentUrlCheck.includes('/result') || !currentUrlCheck.includes('/training/activity')) {
                         isExerciseComplete = true;
                         console.log('✅ Exercice terminé (page de résultat détectée)');
+                        break;
+                    }
+                    if (await isRecapPage(page)) {
+                        isExerciseComplete = true;
+                        console.log('✅ Exercice terminé (récapitulatif détecté)');
                         break;
                     }
 
@@ -287,14 +356,26 @@ async function runAutomation() {
                     // Valider les réponses
                     await validateAnswers(page);
 
-                    // Attendre un peu pour que la page se mette à jour
-                    await page.waitForTimeout(1000);
+                    // Attendre que la page se mette à jour (récap, changement d'URL ou nouvelles questions)
+                    console.log('⏳ Attente de la transition de page...');
+                    try {
+                        await Promise.race([
+                            page.waitForSelector('[data-testid="your-grade"]', { timeout: 10000 }),
+                            page.waitForURL(/\/result/, { timeout: 10000 }),
+                            page.waitForTimeout(5000)
+                        ]);
+                    } catch (e) {
+                        // Timeout atteint, on continue la vérification
+                    }
 
-                    // Vérifier si on a terminé l'exercice (redirection vers résultats ou nouvelle URL)
+                    // Vérifier si on a terminé l'exercice (redirection vers résultats, récapitulatif ou nouvelle URL)
                     const currentUrl = page.url();
                     if (currentUrl.includes('/result') || !currentUrl.includes('/training/activity')) {
                         isExerciseComplete = true;
                         console.log('✅ Exercice terminé!');
+                    } else if (await isRecapPage(page)) {
+                        isExerciseComplete = true;
+                        console.log('✅ Exercice terminé (récapitulatif détecté)!');
                     } else {
                         // Vérifier si les questions ont changé
                         const newProgress = await getProgress(page);
@@ -312,11 +393,16 @@ async function runAutomation() {
                 let isExerciseComplete = false;
 
                 while (!isExerciseComplete) {
-                    // Vérifier si on est sur la page de résultat AVANT de tenter de résoudre
+                    // Vérifier si on est sur la page de résultat ou récapitulatif AVANT de tenter de résoudre
                     const currentUrlCheckPAT = page.url();
                     if (currentUrlCheckPAT.includes('/result') || !currentUrlCheckPAT.includes('/training/activity')) {
                         isExerciseComplete = true;
                         console.log('✅ Exercice terminé (page de résultat détectée)');
+                        break;
+                    }
+                    if (await isRecapPage(page)) {
+                        isExerciseComplete = true;
+                        console.log('✅ Exercice terminé (récapitulatif détecté)');
                         break;
                     }
 
@@ -348,14 +434,26 @@ async function runAutomation() {
                     // Valider les réponses
                     await validateAnswersPAT(page);
 
-                    // Attendre un peu pour que la page se mette à jour
-                    await page.waitForTimeout(1000);
+                    // Attendre que la page se mette à jour (récap, changement d'URL ou nouvelles questions)
+                    console.log('⏳ Attente de la transition de page...');
+                    try {
+                        await Promise.race([
+                            page.waitForSelector('[data-testid="your-grade"]', { timeout: 10000 }),
+                            page.waitForURL(/\/result/, { timeout: 10000 }),
+                            page.waitForTimeout(5000)
+                        ]);
+                    } catch (e) {
+                        // Timeout atteint, on continue la vérification
+                    }
 
                     // Vérifier si on a terminé l'exercice
                     const currentUrl = page.url();
                     if (currentUrl.includes('/result') || !currentUrl.includes('/training/activity')) {
                         isExerciseComplete = true;
                         console.log('✅ Exercice terminé!');
+                    } else if (await isRecapPage(page)) {
+                        isExerciseComplete = true;
+                        console.log('✅ Exercice terminé (récapitulatif détecté)!');
                     } else {
                         // Vérifier si les questions ont changé
                         const newProgress = await getProgressPAT(page);
@@ -376,11 +474,16 @@ async function runAutomation() {
                 const data = await solveTextesACompleter(page);
 
                 while (!isExerciseComplete) {
-                    // Vérifier si on est sur la page de résultat AVANT de tenter de résoudre
+                    // Vérifier si on est sur la page de résultat ou récapitulatif AVANT de tenter de résoudre
                     const currentUrlCheckTAC = page.url();
                     if (currentUrlCheckTAC.includes('/result') || !currentUrlCheckTAC.includes('/training/activity')) {
                         isExerciseComplete = true;
                         console.log('✅ Exercice terminé (page de résultat détectée)');
+                        break;
+                    }
+                    if (await isRecapPage(page)) {
+                        isExerciseComplete = true;
+                        console.log('✅ Exercice terminé (récapitulatif détecté)');
                         break;
                     }
 
@@ -408,14 +511,26 @@ async function runAutomation() {
                     // Cliquer sur le bouton suivant (Passer/Valider/Terminer)
                     const buttonResult = await clickNextButton(page);
 
-                    // Attendre un peu pour que la page se mette à jour
-                    await page.waitForTimeout(1000);
+                    // Attendre que la page se mette à jour (récap, changement d'URL ou nouvelles questions)
+                    console.log('⏳ Attente de la transition de page...');
+                    try {
+                        await Promise.race([
+                            page.waitForSelector('[data-testid="your-grade"]', { timeout: 10000 }),
+                            page.waitForURL(/\/result/, { timeout: 10000 }),
+                            page.waitForTimeout(5000)
+                        ]);
+                    } catch (e) {
+                        // Timeout atteint, on continue la vérification
+                    }
 
                     // Vérifier si on a terminé l'exercice
                     const currentUrl = page.url();
                     if (currentUrl.includes('/result') || !currentUrl.includes('/training/activity') || buttonResult === 'finish') {
                         isExerciseComplete = true;
                         console.log('✅ Exercice terminé!');
+                    } else if (await isRecapPage(page)) {
+                        isExerciseComplete = true;
+                        console.log('✅ Exercice terminé (récapitulatif détecté)!');
                     } else {
                         // Vérifier si on a atteint la fin
                         const newProgress = await getProgressTAC(page);
@@ -432,9 +547,8 @@ async function runAutomation() {
                 exercicesEchoues++;
             }
 
-            // Retourner à la page des exercices
-            await page.goto(exosPageUrl);
-            await page.waitForURL(exosPageUrl);
+            // Gérer la page de récapitulatif (continuer ou retourner à la liste)
+            await handleRecapPage(page, !isLastExercise, exosPageUrl);
         }
 
         // Afficher le résumé de la session
