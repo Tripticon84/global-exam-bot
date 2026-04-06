@@ -261,7 +261,14 @@ async function runAutomation() {
 
             // Pour le premier exercice, naviguer depuis la liste
             // Pour les suivants, on y arrive via "Activité suivante"
-            if (i === 0) {
+            // Si on a été redirigé vers la liste suite à une erreur, il faut naviguer à nouveau
+            if (i === 0 || !page.url().includes('/training/activity')) {
+                // S'assurer d'être sur la page liste
+                if (!page.url().includes('/user-plannings')) {
+                    await page.goto(exosPageUrl);
+                    await page.waitForURL(exosPageUrl);
+                }
+
                 // Sélectionner la div qui contient les boutons d'exercices
                 const sectionHeader = await page.$(`#${exo.sectionId}`);
                 if (!sectionHeader) {
