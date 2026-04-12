@@ -62,24 +62,30 @@ export async function getAllExos(page) {
         sectionHeaders.forEach((header) => {
             const sectionId = header.id;
             const sectionTitle = header.querySelector('p')?.textContent?.trim() || 'Sans titre';
+            const toeicMatch = sectionTitle.match(/TOEIC\s*(\d+)/i);
+            const toeicLabel = toeicMatch ? `TOEIC ${toeicMatch[1]}` : null;
 
             // La grille des exercices est le sibling suivant du header
             const exercisesGrid = header.nextElementSibling;
             if (!exercisesGrid) return;
 
             const exercises = [];
+            const gridChildren = Array.from(exercisesGrid.children || []);
 
-            // Récupérer les boutons d'exercices (activités cliquables)
-            const buttons = exercisesGrid.querySelectorAll('button');
+            // Récupérer uniquement les boutons d'exercices au 1er niveau
+            // (évite de compter les boutons imbriqués dans les cartes d'examen)
+            const buttons = gridChildren.filter((child) => child.tagName === 'BUTTON');
 
             buttons.forEach((button, index) => {
                 const exerciseData = {
                     index: index + 1,
+                    buttonIndex: index + 1,
                     nom: '',
                     statut: 'non_commencé',
                     score: null,
                     type: null,
-                    verrouillé: false
+                    verrouillé: false,
+                    clickType: 'button'
                 };
 
                 // Nom de l'exercice
@@ -144,10 +150,16 @@ export async function getAllExos(page) {
             });
 
             // Vérifier aussi les cartes d'examen (comme "TOEIC 1")
-            const examCards = exercisesGrid.querySelectorAll('.card.col-span-12');
-            examCards.forEach((card) => {
+            const examCards = gridChildren.filter((child) => child.matches('.card.col-span-12'));
+            examCards.forEach((card, examIndex) => {
+                const hasExamVisual = !!card.querySelector('.bg-exam, img[src*="exam"]');
+                if (!hasExamVisual) {
+                    return;
+                }
+
                 const examData = {
-                    index: exercises.length + 1,
+                    index: 0,
+                    cardIndex: examIndex + 1,
                     nom: '',
                     statut: 'non_commencé',
                     score: null,
@@ -155,28 +167,42 @@ export async function getAllExos(page) {
                     verrouillé: false,
                     lien: null,
                     duree: null,
-                    dateTerminé: null
+                    dateTerminé: null,
+                    toeic: toeicMatch ? parseInt(toeicMatch[1], 10) : null,
+                    buttonLabel: null,
+                    clickType: 'exam-card'
                 };
 
                 // Nom de l'examen
                 const titleElement = card.querySelector('.font-bold.text-size-22, .font-bold.text-size-26');
-                examData.nom = titleElement?.textContent?.trim() || 'Examen';
+                const examTitle = titleElement?.textContent?.trim() || 'Examen';
+                examData.nom = toeicLabel ? `[${toeicLabel}] Examen` : examTitle;
+
+                // Bouton principal de la carte (Continuer / Commencer)
+                const primaryButton = card.querySelector('button');
+                examData.buttonLabel = primaryButton?.textContent?.trim() || null;
 
                 // Lien vers la correction ou pour lancer l'examen
-                const linkElement = card.querySelector('a[href*="/exam/"], a[href*="/result"]');
+                const linkElement = card.querySelector('a[href*="/exam/"], a[href*="/activity"], a[href*="/result"]');
                 if (linkElement) {
                     examData.lien = linkElement.getAttribute('href');
-                    if (examData.lien.includes('/result')) {
+                    if (examData.lien && examData.lien.includes('/result')) {
                         examData.statut = 'terminé';
                     }
-                } else {
+                }
+
+                if (/continuer|reprendre/i.test(examData.buttonLabel || '')) {
+                    examData.statut = 'en_cours';
+                } else if (/commencer|démarrer|demarrer/i.test(examData.buttonLabel || '')) {
+                    examData.statut = 'non_commencé';
+                } else if (!examData.lien && !primaryButton) {
                     examData.statut = 'verrouillé';
                     examData.verrouillé = true;
                 }
 
                 // Date de completion
                 const infoText = card.querySelector('.text-size-14.mb-3')?.textContent;
-                if (infoText && infoText.includes('terminé')) {
+                if (infoText && /termin[eé]/i.test(infoText)) {
                     examData.statut = 'terminé';
                     const dateMatch = infoText.match(/(\d{1,2}\/\d{1,2}\/\d{4})/);
                     if (dateMatch) {
@@ -190,7 +216,8 @@ export async function getAllExos(page) {
                     examData.duree = durationElement.textContent.trim();
                 }
 
-                if (examData.nom !== 'Examen' || examData.lien) {
+                if (examData.nom !== 'Examen' || examData.lien || primaryButton) {
+                    examData.index = exercises.length + 1;
                     exercises.push(examData);
                 }
             });
@@ -304,7 +331,10 @@ export async function clickExercise(page, sectionId, exerciseIndex) {
     }
 
     const exercisesGrid = await sectionHeader.evaluateHandle(el => el.nextElementSibling);
-    const buttons = await exercisesGrid.$$('button');
+    let buttons = await exercisesGrid.$$(':scope > button');
+    if (buttons.length === 0) {
+        buttons = await exercisesGrid.$$('button');
+    }
 
     if (exerciseIndex < 1 || exerciseIndex > buttons.length) {
         throw new Error(`Index d'exercice ${exerciseIndex} invalide. Il y a ${buttons.length} exercices dans cette section.`);

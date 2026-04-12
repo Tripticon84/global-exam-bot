@@ -1,198 +1,27 @@
 /**
  * Résout un exercice de type "Conversation" (Listening Partie 3)
  * @param {import('playwright').Page} page - La page Playwright
+ * @param {{ extractTranscription?: boolean }} [options] - Options de résolution
  * @returns {Promise<Object>} Les données de l'exercice (transcription, questions, réponses)
  */
-export async function solveConversation(page) {
+export async function solveConversation(page, options = {}) {
+    const shouldExtractTranscription = options.extractTranscription !== false;
+
     // Vérifier si on est sur une page de consignes avec bouton "Démarrer"
     await clickStartButtonIfPresent(page);
 
     // Attendre que la page soit chargée
     await page.waitForSelector('[data-testid^="question-"], #question-wrapper', { timeout: 15000 });
 
-    // 1. Snapshot du texte visible AVANT ouverture transcript (pour comparaison)
-    const baselineTextsByFrame = new Map();
-    for (const frame of page.frames()) {
-        try {
-            const texts = await frame.evaluate(() => {
-                const isVisible = (el) => {
-                    if (!el) return false;
-                    const style = window.getComputedStyle(el);
-                    const rect = el.getBoundingClientRect();
-                    return style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
-                };
+    let transcription = '';
 
-                const clean = (value) => (value || '').replace(/\s+/g, ' ').trim();
-                const nodes = document.querySelectorAll('p, div, span, article, section, li');
-                const result = [];
+    if (shouldExtractTranscription) {
 
-                nodes.forEach((node) => {
-                    if (!isVisible(node)) return;
-                    const text = clean(node.textContent || '');
-                    if (text.length >= 40 && text.length <= 4000) {
-                        result.push(text);
-                    }
-                });
-
-                return Array.from(new Set(result));
-            });
-
-            baselineTextsByFrame.set(frame, new Set(texts));
-        } catch {
-            baselineTextsByFrame.set(frame, new Set());
-        }
-    }
-
-    const transcriptResponsePromise = page.waitForResponse((response) => {
-        try {
-            if (!response.ok()) return false;
-            const url = response.url().toLowerCase();
-            const contentType = (response.headers()['content-type'] || '').toLowerCase();
-            const isCandidateUrl = /(transcript|support|activity|question|media|user-activit)/.test(url);
-            const isReadableType = /(json|text|javascript|html)/.test(contentType);
-            return isCandidateUrl && isReadableType;
-        } catch {
-            return false;
-        }
-    }, { timeout: 7000 }).catch(() => null);
-
-    // 2. Cliquer sur le bouton Transcription
-    const transcriptionBtn = page.locator('button').filter({ hasText: /Transcription|Transcript|Voir le transcript/i }).first();
-    if (await transcriptionBtn.count()) {
-        await transcriptionBtn.click();
-        console.log('✓ Bouton Transcription cliqué');
-
-        // Attendre que la popup s'ouvre
-        try {
-            await page.waitForSelector('.wysiwyg.wysiwyg-spacing, [data-testid="transcript-content"], [role="dialog"], [data-testid*="transcript"]', { timeout: 7000 });
-            await page.waitForTimeout(300);
-        } catch {
-            // Certaines interfaces affichent le transcript inline
-            await page.waitForTimeout(800);
-        }
-    } else {
-        console.log('⚠️ Bouton Transcription non trouvé');
-    }
-
-    // 3. Récupérer la transcription (DOM connu + fallback delta de texte + fallback réseau, multi-frame)
-    let transcriptionResult = { text: '', source: 'none' };
-
-    const transcriptResponse = await transcriptResponsePromise;
-    if (transcriptResponse) {
-        try {
-            const payloadText = await transcriptResponse.text();
-
-            const htmlToText = (value) => (value || '')
-                .replace(/<[^>]*>/g, ' ')
-                .replace(/\s+/g, ' ')
-                .trim();
-
-            const collectStrings = (input, out = []) => {
-                if (typeof input === 'string') {
-                    const text = htmlToText(input);
-                    if (text.length >= 40) out.push(text);
-                    return out;
-                }
-                if (Array.isArray(input)) {
-                    input.forEach((item) => collectStrings(item, out));
-                    return out;
-                }
-                if (input && typeof input === 'object') {
-                    Object.entries(input).forEach(([key, value]) => {
-                        if (typeof value === 'string') {
-                            const cleaned = htmlToText(value);
-                            if (cleaned.length >= 40 && /(transcript|script|text|content|dialog|modal)/i.test(key)) {
-                                out.push(cleaned);
-                            }
-                        }
-                        collectStrings(value, out);
-                    });
-                }
-                return out;
-            };
-
-            let candidates = [];
-            try {
-                const parsed = JSON.parse(payloadText);
-                candidates = collectStrings(parsed);
-            } catch {
-                candidates = collectStrings(payloadText);
-            }
-
-            if (candidates.length) {
-                candidates = Array.from(new Set(candidates));
-                candidates.sort((a, b) => b.length - a.length);
-                const best = candidates[0];
-                if (best && best.length > transcriptionResult.text.length) {
-                    transcriptionResult = {
-                        text: best,
-                        source: `network:${transcriptResponse.url()}`
-                    };
-                }
-            }
-        } catch {
-            // ignore parsing errors
-        }
-    }
-
-    for (const frame of page.frames()) {
-        try {
-            const bySelectors = await frame.evaluate(() => {
-                const isVisible = (el) => {
-                    if (!el) return false;
-                    const style = window.getComputedStyle(el);
-                    const rect = el.getBoundingClientRect();
-                    return style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
-                };
-
-                const extractCleanText = (el) => {
-                    if (!el) return '';
-                    const clone = el.cloneNode(true);
-                    clone.querySelectorAll('button, svg, path, [aria-hidden="true"]').forEach((node) => node.remove());
-                    return (clone.textContent || '').replace(/\s+/g, ' ').trim();
-                };
-
-                const selectors = [
-                    '[data-testid="transcript-content"]',
-                    '.wysiwyg.wysiwyg-spacing',
-                    '[role="dialog"] .wysiwyg',
-                    '[data-testid*="transcript"]',
-                    '[class*="transcript"]',
-                    '[role="dialog"]',
-                    '[aria-modal="true"]'
-                ];
-
-                const matches = [];
-                for (const selector of selectors) {
-                    const elements = document.querySelectorAll(selector);
-                    elements.forEach((el) => {
-                        if (!isVisible(el)) return;
-                        const text = extractCleanText(el);
-                        if (text.length >= 40) {
-                            matches.push({ text, source: selector });
-                        }
-                    });
-                }
-
-                if (!matches.length) return { text: '', source: 'none' };
-                matches.sort((a, b) => b.text.length - a.text.length);
-                return matches[0];
-            });
-
-            if (bySelectors.text && bySelectors.text.length > transcriptionResult.text.length) {
-                transcriptionResult = bySelectors;
-            }
-        } catch {
-            // ignore frame inaccessible
-        }
-    }
-
-    if (!transcriptionResult.text) {
+        // 1. Snapshot du texte visible AVANT ouverture transcript (pour comparaison)
+        const baselineTextsByFrame = new Map();
         for (const frame of page.frames()) {
             try {
-                const before = baselineTextsByFrame.get(frame) || new Set();
-                const byDelta = await frame.evaluate((beforeArray) => {
-                    const beforeSet = new Set(beforeArray);
+                const texts = await frame.evaluate(() => {
                     const isVisible = (el) => {
                         if (!el) return false;
                         const style = window.getComputedStyle(el);
@@ -202,67 +31,248 @@ export async function solveConversation(page) {
 
                     const clean = (value) => (value || '').replace(/\s+/g, ' ').trim();
                     const nodes = document.querySelectorAll('p, div, span, article, section, li');
-                    const candidates = [];
+                    const result = [];
 
                     nodes.forEach((node) => {
                         if (!isVisible(node)) return;
                         const text = clean(node.textContent || '');
-                        if (text.length >= 40 && text.length <= 4000 && !beforeSet.has(text)) {
-                            candidates.push(text);
+                        if (text.length >= 40 && text.length <= 4000) {
+                            result.push(text);
                         }
                     });
 
-                    if (!candidates.length) return { text: '', source: 'delta:none' };
-                    candidates.sort((a, b) => b.length - a.length);
-                    return { text: candidates[0], source: 'delta:text-visible' };
-                }, Array.from(before));
+                    return Array.from(new Set(result));
+                });
 
-                if (byDelta.text && byDelta.text.length > transcriptionResult.text.length) {
-                    transcriptionResult = byDelta;
+                baselineTextsByFrame.set(frame, new Set(texts));
+            } catch {
+                baselineTextsByFrame.set(frame, new Set());
+            }
+        }
+
+        const transcriptResponsePromise = page.waitForResponse((response) => {
+            try {
+                if (!response.ok()) return false;
+                const url = response.url().toLowerCase();
+                const contentType = (response.headers()['content-type'] || '').toLowerCase();
+                const isCandidateUrl = /(transcript|support|activity|question|media|user-activit)/.test(url);
+                const isReadableType = /(json|text|javascript|html)/.test(contentType);
+                return isCandidateUrl && isReadableType;
+            } catch {
+                return false;
+            }
+        }, { timeout: 7000 }).catch(() => null);
+
+        // 2. Cliquer sur le bouton Transcription
+        const transcriptionBtn = page.locator('button').filter({ hasText: /Transcription|Transcript|Voir le transcript/i }).first();
+        if (await transcriptionBtn.count()) {
+            await transcriptionBtn.click();
+            console.log('✓ Bouton Transcription cliqué');
+
+            // Attendre que la popup s'ouvre
+            try {
+                await page.waitForSelector('.wysiwyg.wysiwyg-spacing, [data-testid="transcript-content"], [role="dialog"], [data-testid*="transcript"]', { timeout: 7000 });
+                await page.waitForTimeout(300);
+            } catch {
+                // Certaines interfaces affichent le transcript inline
+                await page.waitForTimeout(800);
+            }
+        } else {
+            console.log('⚠️ Bouton Transcription non trouvé');
+        }
+
+        // 3. Récupérer la transcription (DOM connu + fallback delta de texte + fallback réseau, multi-frame)
+        let transcriptionResult = { text: '', source: 'none' };
+
+        const transcriptResponse = await transcriptResponsePromise;
+        if (transcriptResponse) {
+            try {
+                const payloadText = await transcriptResponse.text();
+
+                const htmlToText = (value) => (value || '')
+                    .replace(/<[^>]*>/g, ' ')
+                    .replace(/\s+/g, ' ')
+                    .trim();
+
+                const collectStrings = (input, out = []) => {
+                    if (typeof input === 'string') {
+                        const text = htmlToText(input);
+                        if (text.length >= 40) out.push(text);
+                        return out;
+                    }
+                    if (Array.isArray(input)) {
+                        input.forEach((item) => collectStrings(item, out));
+                        return out;
+                    }
+                    if (input && typeof input === 'object') {
+                        Object.entries(input).forEach(([key, value]) => {
+                            if (typeof value === 'string') {
+                                const cleaned = htmlToText(value);
+                                if (cleaned.length >= 40 && /(transcript|script|text|content|dialog|modal)/i.test(key)) {
+                                    out.push(cleaned);
+                                }
+                            }
+                            collectStrings(value, out);
+                        });
+                    }
+                    return out;
+                };
+
+                let candidates = [];
+                try {
+                    const parsed = JSON.parse(payloadText);
+                    candidates = collectStrings(parsed);
+                } catch {
+                    candidates = collectStrings(payloadText);
+                }
+
+                if (candidates.length) {
+                    candidates = Array.from(new Set(candidates));
+                    candidates.sort((a, b) => b.length - a.length);
+                    const best = candidates[0];
+                    if (best && best.length > transcriptionResult.text.length) {
+                        transcriptionResult = {
+                            text: best,
+                            source: `network:${transcriptResponse.url()}`
+                        };
+                    }
+                }
+            } catch {
+                // ignore parsing errors
+            }
+        }
+
+        for (const frame of page.frames()) {
+            try {
+                const bySelectors = await frame.evaluate(() => {
+                    const isVisible = (el) => {
+                        if (!el) return false;
+                        const style = window.getComputedStyle(el);
+                        const rect = el.getBoundingClientRect();
+                        return style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
+                    };
+
+                    const extractCleanText = (el) => {
+                        if (!el) return '';
+                        const clone = el.cloneNode(true);
+                        clone.querySelectorAll('button, svg, path, [aria-hidden="true"]').forEach((node) => node.remove());
+                        return (clone.textContent || '').replace(/\s+/g, ' ').trim();
+                    };
+
+                    const selectors = [
+                        '[data-testid="transcript-content"]',
+                        '.wysiwyg.wysiwyg-spacing',
+                        '[role="dialog"] .wysiwyg',
+                        '[data-testid*="transcript"]',
+                        '[class*="transcript"]',
+                        '[role="dialog"]',
+                        '[aria-modal="true"]'
+                    ];
+
+                    const matches = [];
+                    for (const selector of selectors) {
+                        const elements = document.querySelectorAll(selector);
+                        elements.forEach((el) => {
+                            if (!isVisible(el)) return;
+                            const text = extractCleanText(el);
+                            if (text.length >= 40) {
+                                matches.push({ text, source: selector });
+                            }
+                        });
+                    }
+
+                    if (!matches.length) return { text: '', source: 'none' };
+                    matches.sort((a, b) => b.text.length - a.text.length);
+                    return matches[0];
+                });
+
+                if (bySelectors.text && bySelectors.text.length > transcriptionResult.text.length) {
+                    transcriptionResult = bySelectors;
                 }
             } catch {
                 // ignore frame inaccessible
             }
         }
-    }
 
-    const transcription = transcriptionResult.text;
-    if (transcription) {
-        console.log(`✓ Transcription récupérée (${transcription.length} caractères, source: ${transcriptionResult.source})`);
-    } else {
-        console.log('⚠️ Transcription vide: aucun contenu texte détecté dans la popup/zone transcript');
-    }
+        if (!transcriptionResult.text) {
+            for (const frame of page.frames()) {
+                try {
+                    const before = baselineTextsByFrame.get(frame) || new Set();
+                    const byDelta = await frame.evaluate((beforeArray) => {
+                        const beforeSet = new Set(beforeArray);
+                        const isVisible = (el) => {
+                            if (!el) return false;
+                            const style = window.getComputedStyle(el);
+                            const rect = el.getBoundingClientRect();
+                            return style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
+                        };
 
-    // 3. Fermer la popup
-    const closeSelector = 'button[data-testid="close-modal"], button[aria-label*="Fermer" i], button[aria-label*="Close" i], button.absolute.top-0.right-0';
-    const modalCloseBtn = page.locator(`[role="dialog"] ${closeSelector}, [data-testid="modal"] ${closeSelector}`).first();
+                        const clean = (value) => (value || '').replace(/\s+/g, ' ').trim();
+                        const nodes = document.querySelectorAll('p, div, span, article, section, li');
+                        const candidates = [];
 
-    let popupClosed = false;
+                        nodes.forEach((node) => {
+                            if (!isVisible(node)) return;
+                            const text = clean(node.textContent || '');
+                            if (text.length >= 40 && text.length <= 4000 && !beforeSet.has(text)) {
+                                candidates.push(text);
+                            }
+                        });
 
-    if (await modalCloseBtn.count()) {
-        try {
-            await modalCloseBtn.click({ force: true, timeout: 5000 });
-            popupClosed = true;
-        } catch {
-            // fallback ci-dessous
+                        if (!candidates.length) return { text: '', source: 'delta:none' };
+                        candidates.sort((a, b) => b.length - a.length);
+                        return { text: candidates[0], source: 'delta:text-visible' };
+                    }, Array.from(before));
+
+                    if (byDelta.text && byDelta.text.length > transcriptionResult.text.length) {
+                        transcriptionResult = byDelta;
+                    }
+                } catch {
+                    // ignore frame inaccessible
+                }
+            }
         }
-    }
 
-    if (!popupClosed) {
-        popupClosed = await page.evaluate((selector) => {
-            const btn = document.querySelector(selector);
-            if (!btn) return false;
-            btn.click();
-            return true;
-        }, closeSelector).catch(() => false);
-    }
+        transcription = transcriptionResult.text;
+        if (transcription) {
+            console.log(`✓ Transcription récupérée (${transcription.length} caractères, source: ${transcriptionResult.source})`);
+        } else {
+            console.log('⚠️ Transcription vide: aucun contenu texte détecté dans la popup/zone transcript');
+        }
 
-    if (!popupClosed) {
-        await page.keyboard.press('Escape').catch(() => { });
-    }
+        // 3. Fermer la popup
+        const closeSelector = 'button[data-testid="close-modal"], button[aria-label*="Fermer" i], button[aria-label*="Close" i], button.absolute.top-0.right-0';
+        const modalCloseBtn = page.locator(`[role="dialog"] ${closeSelector}, [data-testid="modal"] ${closeSelector}`).first();
 
-    console.log('✓ Popup fermée');
-    await page.waitForTimeout(500);
+        let popupClosed = false;
+
+        if (await modalCloseBtn.count()) {
+            try {
+                await modalCloseBtn.click({ force: true, timeout: 5000 });
+                popupClosed = true;
+            } catch {
+                // fallback ci-dessous
+            }
+        }
+
+        if (!popupClosed) {
+            popupClosed = await page.evaluate((selector) => {
+                const btn = document.querySelector(selector);
+                if (!btn) return false;
+                btn.click();
+                return true;
+            }, closeSelector).catch(() => false);
+        }
+
+        if (!popupClosed) {
+            await page.keyboard.press('Escape').catch(() => { });
+        }
+
+        console.log('✓ Popup fermée');
+        await page.waitForTimeout(500);
+    } else {
+        console.log('ℹ️ Mode sans transcription activé');
+    }
 
     // 4. Récupérer les questions et leurs réponses
     const questionsData = await page.evaluate(() => {

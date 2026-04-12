@@ -16,6 +16,10 @@ Bot d'automatisation pour compléter les exercices sur GlobalExam (TOEIC).
   - **Textes à compléter**
   - **Textes simples**
   - **Textes multiples**
+- ✅ Support des examens TOEIC (`[TOEIC 1]` à `[TOEIC 4]`)
+  - Détection dédiée des cartes d'exam
+  - Gestion de la popup "continuer cet examen blanc"
+  - Orchestration automatique des sous-activités Listening/Reading
 - ✅ Attente réaliste basée sur la durée de l'audio (Listening)
 - ✅ Temps de réflexion aléatoire configurable
 - ✅ Exécution par section (une section par lancement)
@@ -69,6 +73,11 @@ HEADLESS=false
 # Provider: 'openai' ou 'gemini'
 AI_PROVIDER=gemini
 
+# IA dans les examens TOEIC
+# false = réponses aléatoires dans les exams
+# true = autorise l'IA dans les exams (si configurée)
+EXAM_AI_ENABLED=false
+
 # OpenAI (ChatGPT)
 # Obtenez votre clé sur https://platform.openai.com/api-keys
 OPENAI_API_KEY=
@@ -110,7 +119,8 @@ global-exam-bot/
 │       ├── exercices-types.js  # Définition des types d'exercices
 │       ├── conversation.js     # Handler Conversation/Monologue
 │       ├── phrases-a-troue.js  # Handler Phrases à trous
-│       └── textes-a-completer.js # Handler Textes à compléter
+│       ├── textes-a-completer.js # Handler Textes à compléter
+│       └── exam-solver.js      # Orchestrateur des examens TOEIC
 ├── .env.example                # Exemple de configuration
 ├── package.json
 └── README.md
@@ -144,6 +154,7 @@ GEMINI_MODEL=gemini-2.0-flash
 
 > 💡 **Sans configuration IA**, le bot sélectionnera des réponses aléatoires.
 > 📸 **Note** : Les exercices **Photographie** utilisent toujours des réponses aléatoires (l'IA n'est pas utile sans texte/transcription).
+> 🧪 **Exam TOEIC** : vous pouvez forcer le mode aléatoire avec `EXAM_AI_ENABLED=false`.
 
 ## 🔧 Configuration avancée
 

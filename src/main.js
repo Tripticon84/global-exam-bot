@@ -6,6 +6,7 @@ import { detectExerciceType } from './exercices/exercices-types.js';
 import { solveConversation, selectAnswerByLetter, validateAnswers, getProgress, waitBasedOnAudio } from './exercices/conversation.js';
 import { solvePhrasesATrous, selectAnswerByLetter as selectAnswerByLetterPAT, validateAnswers as validateAnswersPAT, getProgress as getProgressPAT, } from './exercices/phrases-a-troue.js';
 import { solveTextesACompleter, getCurrentQuestion, selectAnswerByLetter as selectAnswerByLetterTAC, clickNextButton, getProgress as getProgressTAC } from './exercices/textes-a-completer.js';
+import { solveExam, handleExamResumePopupIfPresent } from './exercices/exam-solver.js';
 import { isAIConfigured, getAIAnswersForConversationBatch, getAIAnswersForFillInTheBlankBatch, getAIAnswerForTextCompletion } from './ai/ai-provider.js';
 
 dotenv.config();
@@ -14,6 +15,7 @@ dotenv.config();
 const WAIT_ENABLED = process.env.WAIT_ENABLED !== 'false';
 const WAIT_MIN_EXTRA = parseInt(process.env.WAIT_MIN_EXTRA) || 2000;
 const WAIT_MAX_EXTRA = parseInt(process.env.WAIT_MAX_EXTRA) || 8000;
+const EXAM_AI_ENABLED = process.env.EXAM_AI_ENABLED === 'true';
 
 // Sections à ignorer
 let SECTIONS_TO_SKIP = [];
@@ -291,18 +293,66 @@ async function runAutomation() {
                 // Récupérer la grille d'exercices (nextElementSibling)
                 const exercisesGrid = await sectionHeader.evaluateHandle(el => el.nextElementSibling);
 
-                const buttons = await exercisesGrid.$$('button');
-                // Cliquer sur le bouton à l'index correspondant (index - 1 car l'index est 1-based)
-                if (exo.index > 0 && exo.index <= buttons.length) {
-                    await buttons[exo.index - 1].click();
-                    console.log(`Exercice cliqué: ${exo.nom}`);
+                if (exo.type === 'exam') {
+                    let examCards = await exercisesGrid.$$(':scope > .card.col-span-12');
+                    if (examCards.length === 0) {
+                        examCards = await exercisesGrid.$$('.card.col-span-12');
+                    }
+
+                    const cardIndex = exo.cardIndex || 1;
+                    const targetExamCard = cardIndex > 0 && cardIndex <= examCards.length
+                        ? examCards[cardIndex - 1]
+                        : examCards[0] || null;
+
+                    if (!targetExamCard) {
+                        console.error(`Carte d'exam introuvable pour la section ${exo.sectionId}`);
+                        continue;
+                    }
+
+                    const startButton = await targetExamCard.$('button:has-text("Continuer"), button:has-text("Commencer"), button:has-text("Reprendre"), button:has-text("Démarrer")');
+                    const examLink = await targetExamCard.$('a[href*="/activity"], a[href*="/exam/activity"], a[href*="/result"]');
+
+                    if (startButton) {
+                        await startButton.click();
+                    } else if (examLink) {
+                        await examLink.click();
+                    } else {
+                        console.error(`Aucune action de lancement trouvée pour l'exam: ${exo.nom}`);
+                        continue;
+                    }
+
+                    console.log(`Examen cliqué: ${exo.nom}`);
+
+                    // Une popup peut apparaître si l'exam a déjà été commencé.
+                    await handleExamResumePopupIfPresent(page, 'continue');
+
+                    try {
+                        await Promise.race([
+                            page.waitForURL(/\/activity.*/, { timeout: 20000 }),
+                            page.waitForSelector('[data-testid^="question-"], #question-wrapper', { timeout: 20000 })
+                        ]);
+                    } catch {
+                        console.log('⚠ Chargement de l\'activity non confirmé immédiatement (exam), poursuite...');
+                    }
                 } else {
-                    console.error(`Index d'exercice ${exo.index} invalide pour la section ${exo.sectionId}`);
+                    let buttons = await exercisesGrid.$$(':scope > button');
+                    if (buttons.length === 0) {
+                        buttons = await exercisesGrid.$$('button');
+                    }
+
+                    const buttonIndex = exo.buttonIndex || exo.index;
+                    // Cliquer sur le bouton à l'index correspondant (index - 1 car l'index est 1-based)
+                    if (buttonIndex > 0 && buttonIndex <= buttons.length) {
+                        await buttons[buttonIndex - 1].click();
+                        console.log(`Exercice cliqué: ${exo.nom}`);
+                    } else {
+                        console.error(`Index d'exercice ${buttonIndex} invalide pour la section ${exo.sectionId}`);
+                        continue;
+                    }
+
+                    // Attendre que la nouvelle page soit chargée
+                    await page.waitForURL(/\/activity.*/);
                 }
-
-
-                // Attendre que la nouvelle page soit chargée
-                await page.waitForURL(/\/activity.*/);
             } // fin if (i === 0)
 
             // Détection du type d'exercice
@@ -565,6 +615,23 @@ async function runAutomation() {
                 }
 
                 exercicesCompletes++;
+            } else if (exerciceType && ['TOEICExam1', 'TOEICExam2', 'TOEICExam3', 'TOEICExam4', 'Exam'].includes(exerciceType.type)) {
+                console.log('🧩 Résolution de l\'exam en mode orchestré...');
+
+                const examSummary = await solveExam(page, {
+                    waitEnabled: WAIT_ENABLED,
+                    waitMinExtra: WAIT_MIN_EXTRA,
+                    waitMaxExtra: WAIT_MAX_EXTRA,
+                    examAIEnabled: EXAM_AI_ENABLED,
+                    resumeAction: 'continue'
+                });
+
+                if (examSummary.solvedActivities > 0 || page.url().includes('/result') || await isRecapPage(page)) {
+                    exercicesCompletes++;
+                } else {
+                    console.log('⚠ Exam détecté mais aucune activité résolue');
+                    exercicesEchoues++;
+                }
             } else {
                 console.log('⚠ Type d\'exercice non supporté:', exerciceType?.label || 'Inconnu');
                 exercicesEchoues++;

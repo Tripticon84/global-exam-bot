@@ -41,6 +41,26 @@ export const EXERCICE_TYPES = [
     },
     {
         category: "Exam",
+        type: "TOEICExam1",
+        label: "[TOEIC 1]"
+    },
+    {
+        category: "Exam",
+        type: "TOEICExam2",
+        label: "[TOEIC 2]"
+    },
+    {
+        category: "Exam",
+        type: "TOEICExam3",
+        label: "[TOEIC 3]"
+    },
+    {
+        category: "Exam",
+        type: "TOEICExam4",
+        label: "[TOEIC 4]"
+    },
+    {
+        category: "Exam",
         type: "Exam",
         label: "Examen"
     }
@@ -50,5 +70,15 @@ export const getExerciceType = (id) => EXERCICE_TYPES.find((t) => t.id === id) |
 
 // Détection du type d'exercice
 export const detectExerciceType = async (exo) => {
+    if (!exo?.nom) {
+        return null;
+    }
+
+    // Priorité aux tags explicites [TOEIC 1..4]
+    const toeicMatch = exo.nom.match(/\[TOEIC\s*([1-4])\]/i);
+    if (toeicMatch) {
+        return EXERCICE_TYPES.find((t) => t.type === `TOEICExam${toeicMatch[1]}`) || null;
+    }
+
     return EXERCICE_TYPES.find((t) => exo.nom && exo.nom.includes(t.label)) || null;
 }
