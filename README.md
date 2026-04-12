@@ -59,6 +59,25 @@ WAIT_MAX_EXTRA=8000
 
 # Temps de base pour les exercices sans audio (en millisecondes)
 WAIT_BASE_TIMER=15000
+
+# Taille de la fenêtre du navigateur
+BROWSER_WIDTH=1280
+BROWSER_HEIGHT=800
+HEADLESS=false
+
+# Configuration IA
+# Provider: 'openai' ou 'gemini'
+AI_PROVIDER=gemini
+
+# OpenAI (ChatGPT)
+# Obtenez votre clé sur https://platform.openai.com/api-keys
+OPENAI_API_KEY=
+OPENAI_MODEL=gpt-4o-mini
+
+# Google Gemini
+# Obtenez votre clé sur https://aistudio.google.com/app/apikey
+GEMINI_API_KEY=
+GEMINI_MODEL=gemini-2.0-flash
 ```
 
 ## 🎮 Utilisation
@@ -124,7 +143,6 @@ GEMINI_MODEL=gemini-2.0-flash
 ```
 
 > 💡 **Sans configuration IA**, le bot sélectionnera des réponses aléatoires.
-
 > 📸 **Note** : Les exercices **Photographie** utilisent toujours des réponses aléatoires (l'IA n'est pas utile sans texte/transcription).
 
 ## 🔧 Configuration avancée

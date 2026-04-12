@@ -35,7 +35,7 @@ async function callOpenAI(prompt) {
                 }
             ],
             temperature: 0.1,
-            max_tokens: 10
+            max_tokens: 50
         })
     });
 
@@ -59,7 +59,7 @@ async function callGemini(prompt) {
         throw new Error('GEMINI_API_KEY non définie dans .env');
     }
 
-    const model = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+    const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
     const response = await fetch(url, {

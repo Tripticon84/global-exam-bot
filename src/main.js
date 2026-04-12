@@ -16,7 +16,12 @@ const WAIT_MIN_EXTRA = parseInt(process.env.WAIT_MIN_EXTRA) || 2000;
 const WAIT_MAX_EXTRA = parseInt(process.env.WAIT_MAX_EXTRA) || 8000;
 
 // Sections à ignorer
-const SECTIONS_TO_SKIP = ['pm-55094', 'pm-55095', 'pm-55098', 'pm-55101', 'pm-55102'];
+let SECTIONS_TO_SKIP = [];
+
+if (process.env.SKIP_TOEIC === 'true') {
+    SECTIONS_TO_SKIP = process.env.SECTIONS_TO_SKIP ? process.env.SECTIONS_TO_SKIP.split(',').map(s => s.trim()) : [];
+    console.log('⚠ Mode TOEIC activé, les sections suivantes seront ignorées:', SECTIONS_TO_SKIP.length > 0 ? SECTIONS_TO_SKIP.join(', ') : 'Aucune');
+}
 
 /**
  * Pose une question à l'utilisateur dans le terminal
@@ -157,6 +162,13 @@ async function runAutomation() {
         }
 
         try {
+            await page.waitForSelector('button[class="wisepops-close"]', { timeout: 3000 });
+            await page.click('button[class="wisepops-close"]');
+        } catch (e) {
+            // Le bouton n'est pas apparu, on continue
+        }
+
+        try {
             await page.waitForSelector('button[class="pt-close"]', { timeout: 3000 });
             await page.click('button[class="pt-close"]');
         } catch (e) {
@@ -262,7 +274,7 @@ async function runAutomation() {
             // Pour le premier exercice, naviguer depuis la liste
             // Pour les suivants, on y arrive via "Activité suivante"
             // Si on a été redirigé vers la liste suite à une erreur, il faut naviguer à nouveau
-            if (i === 0 || !page.url().includes('/training/activity')) {
+            if (i === 0 || !page.url().match(/\/activity/)) {
                 // S'assurer d'être sur la page liste
                 if (!page.url().includes('/user-plannings')) {
                     await page.goto(exosPageUrl);
@@ -278,8 +290,8 @@ async function runAutomation() {
 
                 // Récupérer la grille d'exercices (nextElementSibling)
                 const exercisesGrid = await sectionHeader.evaluateHandle(el => el.nextElementSibling);
-                const buttons = await exercisesGrid.$$('button');
 
+                const buttons = await exercisesGrid.$$('button');
                 // Cliquer sur le bouton à l'index correspondant (index - 1 car l'index est 1-based)
                 if (exo.index > 0 && exo.index <= buttons.length) {
                     await buttons[exo.index - 1].click();
@@ -288,8 +300,9 @@ async function runAutomation() {
                     console.error(`Index d'exercice ${exo.index} invalide pour la section ${exo.sectionId}`);
                 }
 
+
                 // Attendre que la nouvelle page soit chargée
-                await page.waitForURL(/https:\/\/exam\.global-exam\.com\/training\/activity.*/);
+                await page.waitForURL(/\/activity.*/);
             } // fin if (i === 0)
 
             // Détection du type d'exercice
@@ -313,7 +326,7 @@ async function runAutomation() {
                 while (!isExerciseComplete) {
                     // Vérifier si on est sur la page de résultat ou récapitulatif AVANT de tenter de résoudre
                     const currentUrlCheck = page.url();
-                    if (currentUrlCheck.includes('/result') || !currentUrlCheck.includes('/training/activity')) {
+                    if (currentUrlCheck.includes('/result') || !currentUrlCheck.match(/\/activity/)) {
                         isExerciseComplete = true;
                         console.log('✅ Exercice terminé (page de résultat détectée)');
                         break;
@@ -380,7 +393,7 @@ async function runAutomation() {
 
                     // Vérifier si on a terminé l'exercice (redirection vers résultats, récapitulatif ou nouvelle URL)
                     const currentUrl = page.url();
-                    if (currentUrl.includes('/result') || !currentUrl.includes('/training/activity')) {
+                    if (currentUrl.includes('/result') || !currentUrl.match('/activity/')) {
                         isExerciseComplete = true;
                         console.log('✅ Exercice terminé!');
                     } else if (await isRecapPage(page)) {
@@ -405,7 +418,7 @@ async function runAutomation() {
                 while (!isExerciseComplete) {
                     // Vérifier si on est sur la page de résultat ou récapitulatif AVANT de tenter de résoudre
                     const currentUrlCheckPAT = page.url();
-                    if (currentUrlCheckPAT.includes('/result') || !currentUrlCheckPAT.includes('/training/activity')) {
+                    if (currentUrlCheckPAT.includes('/result') || !currentUrlCheckPAT.match('/activity/')) {
                         isExerciseComplete = true;
                         console.log('✅ Exercice terminé (page de résultat détectée)');
                         break;
@@ -458,7 +471,7 @@ async function runAutomation() {
 
                     // Vérifier si on a terminé l'exercice
                     const currentUrl = page.url();
-                    if (currentUrl.includes('/result') || !currentUrl.includes('/training/activity')) {
+                    if (currentUrl.includes('/result') || !currentUrl.match('/activity/')) {
                         isExerciseComplete = true;
                         console.log('✅ Exercice terminé!');
                     } else if (await isRecapPage(page)) {
@@ -476,7 +489,7 @@ async function runAutomation() {
 
                 exercicesCompletes++;
 
-            } else if (exerciceType && exerciceType.type === 'TextCompletion' || exerciceType.type === 'SimpleTextCompletion' || exerciceType.type === 'MultipleTexts') {
+            } else if (exerciceType && (exerciceType.type === 'TextCompletion' || exerciceType.type === 'SimpleTextCompletion' || exerciceType.type === 'MultipleTexts')) {
                 // Exercice de type "Textes à compléter" (Reading Partie 6)
                 let isExerciseComplete = false;
 
@@ -486,7 +499,7 @@ async function runAutomation() {
                 while (!isExerciseComplete) {
                     // Vérifier si on est sur la page de résultat ou récapitulatif AVANT de tenter de résoudre
                     const currentUrlCheckTAC = page.url();
-                    if (currentUrlCheckTAC.includes('/result') || !currentUrlCheckTAC.includes('/training/activity')) {
+                    if (currentUrlCheckTAC.includes('/result') || !currentUrlCheckTAC.match('/activity/')) {
                         isExerciseComplete = true;
                         console.log('✅ Exercice terminé (page de résultat détectée)');
                         break;
@@ -535,7 +548,7 @@ async function runAutomation() {
 
                     // Vérifier si on a terminé l'exercice
                     const currentUrl = page.url();
-                    if (currentUrl.includes('/result') || !currentUrl.includes('/training/activity') || buttonResult === 'finish') {
+                    if (currentUrl.includes('/result') || !currentUrl.match('/activity/') || buttonResult === 'finish') {
                         isExerciseComplete = true;
                         console.log('✅ Exercice terminé!');
                     } else if (await isRecapPage(page)) {

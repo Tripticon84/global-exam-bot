@@ -39,6 +39,11 @@ export const EXERCICE_TYPES = [
         type: "MultipleTexts",
         label: "Textes multiples"
     },
+    {
+        category: "Exam",
+        type: "Exam",
+        label: "Examen"
+    }
 ];
 
 export const getExerciceType = (id) => EXERCICE_TYPES.find((t) => t.id === id) || null;

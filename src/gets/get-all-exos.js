@@ -169,6 +169,9 @@ export async function getAllExos(page) {
                     if (examData.lien.includes('/result')) {
                         examData.statut = 'terminé';
                     }
+                } else {
+                    examData.statut = 'verrouillé';
+                    examData.verrouillé = true;
                 }
 
                 // Date de completion
