@@ -1,5 +1,108 @@
 import { extractProgress, extractQuestionsFromPage, getSectionKind } from './dom-parsers.js';
 
+function cleanText(value) {
+    return (value || '').replace(/\s+/g, ' ').trim();
+}
+
+function toAnswerLetter(index) {
+    return `${['A', 'B', 'C', 'D'][index] || 'A'}.`;
+}
+
+function parseAnswerText(raw, index) {
+    const text = cleanText(raw);
+    const match = text.match(/^([A-D])[.)]?\s*(.*)$/i);
+    if (match) {
+        return {
+            lettre: `${match[1].toUpperCase()}.`,
+            texte: cleanText(match[2])
+        };
+    }
+
+    return {
+        lettre: toAnswerLetter(index),
+        texte: text
+    };
+}
+
+function collapseRepeatedHalf(text) {
+    const normalized = cleanText(text);
+    if (!normalized) return '';
+
+    const middle = Math.floor(normalized.length / 2);
+    const left = cleanText(normalized.slice(0, middle));
+    const right = cleanText(normalized.slice(middle));
+
+    if (left && right && left === right) {
+        return left;
+    }
+
+    return normalized;
+}
+
+function sanitizeSupportText(rawSupport, questionData) {
+    if (!rawSupport) return '';
+
+    let text = collapseRepeatedHalf(rawSupport)
+        .replace(/\bZoomer\b/gi, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    if (!text) return '';
+
+    if (questionData?.texte) {
+        const escapedQuestion = questionData.texte.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        text = text.replace(new RegExp(escapedQuestion, 'gi'), ' ').replace(/\s+/g, ' ').trim();
+    }
+
+    if (Array.isArray(questionData?.reponses)) {
+        for (const answer of questionData.reponses) {
+            const answerText = cleanText(answer?.texte);
+            if (!answerText) continue;
+            const escapedAnswer = answerText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            text = text.replace(new RegExp(escapedAnswer, 'gi'), ' ').replace(/\s+/g, ' ').trim();
+        }
+    }
+
+    return text;
+}
+
+async function extractSupportText(page) {
+    return page.evaluate(() => {
+        const isVisible = (el) => {
+            if (!el) return false;
+            const rect = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+        };
+
+        const clean = (value) => (value || '').replace(/\s+/g, ' ').trim();
+
+        const extractFrom = (node) => {
+            if (!node || !isVisible(node)) return '';
+
+            const clone = node.cloneNode(true);
+            clone.querySelectorAll('#question-wrapper, button, input, label, svg, path, img, [aria-hidden="true"]').forEach((el) => el.remove());
+            return clean(clone.innerText || clone.textContent || '');
+        };
+
+        const candidates = [
+            document.querySelector('#supports .wysiwyg'),
+            document.querySelector('#supports'),
+            document.querySelector('#question-test > div:first-child .wysiwyg'),
+            document.querySelector('#question-test > div:first-child .bullet-list'),
+            document.querySelector('#question-test > div:first-child')
+        ];
+
+        let best = '';
+        for (const node of candidates) {
+            const text = extractFrom(node);
+            if (text.length > best.length) best = text;
+        }
+
+        return best;
+    }).catch(() => '');
+}
+
 /**
  * Résout un exercice de type "Textes à compléter" (Reading Partie 6)
  * @param {import('playwright').Page} page - La page Playwright
@@ -12,18 +115,15 @@ export async function solveTextesACompleter(page) {
     // Attendre que la page soit chargée
     await page.waitForSelector('[data-testid^="question-"], #question-wrapper', { timeout: 15000 });
 
-    // Récupérer le texte support
-    const texteSupport = await page.evaluate(() => {
-        const supportElement = document.querySelector('#supports .wysiwyg, #supports, #question-test > div:first-child .bullet-list, #question-test > div:first-child');
-        return supportElement?.innerText?.trim() || '';
-    });
+    // Récupérer la question visible actuelle et ses réponses
+    const questionData = await getCurrentQuestion(page);
+
+    const rawSupport = await extractSupportText(page);
+    const texteSupport = sanitizeSupportText(rawSupport, questionData);
 
     console.log('✓ Texte support récupéré');
     console.log('\n📄 Texte:');
-    console.log(texteSupport);
-
-    // Récupérer la question visible actuelle et ses réponses
-    const questionData = await getCurrentQuestion(page);
+    console.log(texteSupport || '(texte support non détecté)');
 
     return {
         texte: texteSupport,
@@ -37,16 +137,88 @@ export async function solveTextesACompleter(page) {
  * @returns {Promise<Object>} Les données de la question courante
  */
 export async function getCurrentQuestion(page) {
-    const [questionData] = await extractQuestionsFromPage(page, { visibleOnly: true });
+    const questionData = await page.evaluate(() => {
+        const isVisible = (el) => {
+            if (!el) return false;
+            const rect = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+        };
 
-    if (questionData) {
-        console.log(`\n${questionData.numero}: ${questionData.texte}`);
-        questionData.reponses.forEach(r => {
+        const clean = (value) => (value || '').replace(/\s+/g, ' ').trim();
+        const wrapper = document.querySelector('#question-wrapper');
+        if (!wrapper || !isVisible(wrapper)) {
+            return null;
+        }
+
+        const questionText = clean(
+            wrapper.querySelector('#question-header h2')?.innerText
+            || wrapper.querySelector('#question-header p')?.innerText
+            || wrapper.querySelector('h2, p')?.innerText
+            || ''
+        );
+
+        const labels = Array.from(wrapper.querySelectorAll('#question-content label[for], #question-content label'))
+            .filter((label) => isVisible(label));
+
+        const uniqueLabels = [];
+        const seen = new Set();
+        labels.forEach((label) => {
+            const key = `${label.getAttribute('for') || ''}|${clean(label.innerText || label.textContent || '')}`;
+            if (!seen.has(key)) {
+                seen.add(key);
+                uniqueLabels.push(label);
+            }
+        });
+
+        const reponses = uniqueLabels.map((label, index) => {
+            const chunks = Array.from(label.querySelectorAll('span'))
+                .map((node) => clean(node.textContent || ''))
+                .filter(Boolean);
+
+            const longestChunk = chunks.sort((a, b) => b.length - a.length)[0] || '';
+            const text = longestChunk || clean(label.innerText || label.textContent || '');
+            const forId = label.getAttribute('for');
+
+            return {
+                index,
+                texte: text,
+                selector: forId ? `label[for="${forId}"]` : '',
+                value: forId ? (document.getElementById(forId)?.value || '') : ''
+            };
+        });
+
+        return {
+            index: 0,
+            numero: 'Question 1',
+            texte: questionText,
+            reponses
+        };
+    });
+
+    let normalizedQuestion = questionData;
+    if (!normalizedQuestion) {
+        const [fallbackQuestion] = await extractQuestionsFromPage(page, { visibleOnly: true });
+        normalizedQuestion = fallbackQuestion;
+    }
+
+    if (normalizedQuestion) {
+        normalizedQuestion.reponses = (normalizedQuestion.reponses || []).map((answer, index) => {
+            const parsed = parseAnswerText(answer?.texte || '', index);
+            return {
+                ...answer,
+                lettre: answer?.lettre || parsed.lettre,
+                texte: parsed.texte
+            };
+        });
+
+        console.log(`\n${normalizedQuestion.numero}: ${normalizedQuestion.texte}`);
+        normalizedQuestion.reponses.forEach(r => {
             console.log(`  ${r.lettre} ${r.texte}`);
         });
     }
 
-    return questionData;
+    return normalizedQuestion;
 }
 
 /**
