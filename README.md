@@ -23,6 +23,10 @@ Bot d'automatisation pour compléter les exercices sur GlobalExam (TOEIC).
 - ✅ Attente réaliste basée sur la durée de l'audio (Listening)
 - ✅ Temps de réflexion aléatoire configurable
 - ✅ Exécution par section (une section par lancement)
+- ✅ Mode durée vidéo (10 min, 30 min, 1h, personnalisé)
+  - Sélection manuelle d'un exercice vidéo par clic utilisateur
+  - Boucles de 10 minutes avec contrôle du temps d'activité gagné
+  - Récapitulatif des lancements et du gain observé
 - ✅ Résumé de session à la fin
 - ✅ **Intégration IA** (ChatGPT / Gemini) pour sélectionner les bonnes réponses
   - Requêtes batch (un seul appel API pour toutes les questions d'un exercice)
@@ -64,6 +68,9 @@ WAIT_MAX_EXTRA=8000
 # Temps de base pour les exercices sans audio (en millisecondes)
 WAIT_BASE_TIMER=15000
 
+# Mode durée vidéo: attente passive par cycle (10 min par défaut)
+VIDEO_LOOP_WAIT_MS=600000
+
 # Taille de la fenêtre du navigateur
 BROWSER_WIDTH=1280
 BROWSER_HEIGHT=800
@@ -102,16 +109,31 @@ AI_CHOICE_MAX_CHARS=160
 ```bash
 # Lancer le bot
 npm start
+
+# Lancer directement le mode durée (10 min)
+npm run start:duration10
+
+# Lancer en mode durée via argument CLI
+npm start -- --duration 30m
 ```
 
 Le bot va :
 
 1. Se connecter à GlobalExam
 2. Récupérer la liste des exercices à faire
-3. Compléter **une section** d'exercices
+3. Exécuter le mode choisi (section, nombre d'exercices, durée vidéo)
 4. Afficher un résumé de la session
 
-> ⚠️ **Note** : Le bot ne traite qu'une seule section par exécution. Relancez-le pour faire la section suivante.
+### Modes interactifs
+
+Au démarrage (sans argument CLI), vous pouvez choisir:
+
+1. Section entière (première section disponible)
+2. Un seul exercice
+3. Un nombre précis d'exercices
+4. Durée vidéo (10 min, 30 min, 1h, personnalisé)
+
+En mode durée, le bot vous demande de cliquer un exercice vidéo dans le navigateur, lance la vidéo, attend par cycles de 10 minutes, sort de l'activité, vérifie l'évolution du temps passé, puis recommence jusqu'à la durée cible.
 
 ## 📁 Structure du projet
 
