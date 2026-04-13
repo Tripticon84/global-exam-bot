@@ -6,6 +6,7 @@ import { detectExerciceType } from './exercices/exercices-types.js';
 import { solveConversation, selectAnswerByLetter, validateAnswers, getProgress, waitBasedOnAudio } from './exercices/conversation.js';
 import { solvePhrasesATrous, selectAnswerByLetter as selectAnswerByLetterPAT, validateAnswers as validateAnswersPAT, getProgress as getProgressPAT, } from './exercices/phrases-a-troue.js';
 import { solveTextesACompleter, getCurrentQuestion, selectAnswerByLetter as selectAnswerByLetterTAC, clickNextButton, getProgress as getProgressTAC } from './exercices/textes-a-completer.js';
+import { parseDurationInput, formatDuration, runVideoDurationMode } from './exercices/video-duration-mode.js';
 import { solveExam, handleExamResumePopupIfPresent } from './exercices/exam-solver.js';
 import { isAIConfigured, getAIAnswersForConversationBatch, getAIAnswersForFillInTheBlankBatch, getAIAnswerForTextCompletion } from './ai/ai-provider.js';
 
@@ -16,6 +17,7 @@ const WAIT_ENABLED = process.env.WAIT_ENABLED !== 'false';
 const WAIT_MIN_EXTRA = parseInt(process.env.WAIT_MIN_EXTRA) || 2000;
 const WAIT_MAX_EXTRA = parseInt(process.env.WAIT_MAX_EXTRA) || 8000;
 const EXAM_AI_ENABLED = process.env.EXAM_AI_ENABLED === 'true';
+const VIDEO_LOOP_WAIT_MS = parseInt(process.env.VIDEO_LOOP_WAIT_MS) > 0 ? parseInt(process.env.VIDEO_LOOP_WAIT_MS) : 10 * 60 * 1000;
 
 // Sections à ignorer
 let SECTIONS_TO_SKIP = [];
@@ -44,7 +46,8 @@ function askUser(question) {
  * Parse les arguments CLI pour déterminer le mode d'exécution
  * --section : section entière (défaut)
  * --count N ou -n N : N exercices
- * @returns {{ mode: 'section'|'count', count?: number }}
+ * --duration 30m ou -d 1h : mode durée vidéo
+ * @returns {{ mode: 'section'|'count'|'interactive'|'duration', count?: number, durationMs?: number }}
  */
 function parseArgs() {
     const args = process.argv.slice(2);
@@ -52,6 +55,10 @@ function parseArgs() {
         if ((args[i] === '--count' || args[i] === '-n') && args[i + 1]) {
             const n = parseInt(args[i + 1]);
             if (!isNaN(n) && n > 0) return { mode: 'count', count: n };
+        }
+        if ((args[i] === '--duration' || args[i] === '-d') && args[i + 1]) {
+            const durationMs = parseDurationInput(args[i + 1]);
+            if (durationMs > 0) return { mode: 'duration', durationMs };
         }
         if (args[i] === '--section' || args[i] === '-s') return { mode: 'section' };
     }
@@ -223,7 +230,8 @@ async function runAutomation() {
             console.log('  1. Section entière (première section disponible)');
             console.log('  2. Un seul exercice');
             console.log('  3. Un nombre précis d\'exercices');
-            const choice = await askUser('\nVotre choix (1/2/3) : ');
+            console.log('  4. Durée cible (10 min, 30 min, 1 h, personnalisé)');
+            const choice = await askUser('\nVotre choix (1/2/3/4) : ');
 
             if (choice === '2') {
                 runConfig = { mode: 'count', count: 1 };
@@ -236,16 +244,43 @@ async function runAutomation() {
                 } else {
                     runConfig = { mode: 'count', count };
                 }
+            } else if (choice === '4') {
+                console.log('\n  a. 10 min');
+                console.log('  b. 30 min');
+                console.log('  c. 1 heure');
+                console.log('  d. Personnalisé');
+                const durationChoice = (await askUser('Choix durée (a/b/c/d) : ')).toLowerCase();
+
+                let durationMs;
+                if (durationChoice === 'a') {
+                    durationMs = 10 * 60 * 1000;
+                } else if (durationChoice === 'b') {
+                    durationMs = 30 * 60 * 1000;
+                } else if (durationChoice === 'c') {
+                    durationMs = 60 * 60 * 1000;
+                } else {
+                    const customValue = await askUser('Durée personnalisée (ex: 45m, 2h, 90) : ');
+                    durationMs = parseDurationInput(customValue);
+                }
+
+                if (!Number.isFinite(durationMs) || durationMs <= 0) {
+                    console.log('⚠ Durée invalide, mode section entière par défaut.');
+                    runConfig = { mode: 'section' };
+                } else {
+                    runConfig = { mode: 'duration', durationMs };
+                }
             } else {
                 runConfig = { mode: 'section' };
             }
         }
 
         // Sélectionner les exercices à faire selon le mode
-        let selectedExercises;
+        let selectedExercises = [];
         let sessionLabel;
 
-        if (runConfig.mode === 'count') {
+        if (runConfig.mode === 'duration') {
+            sessionLabel = `Mode durée vidéo (${formatDuration(runConfig.durationMs)})`;
+        } else if (runConfig.mode === 'count') {
             // Prendre les N premiers exercices (tous sections confondues)
             selectedExercises = exercisesToDo.slice(0, runConfig.count);
             sessionLabel = runConfig.count === 1
@@ -258,387 +293,401 @@ async function runAutomation() {
             sessionLabel = `Section "${selectedExercises[0].section}"`;
         }
 
-        console.log(`\n🎯 Mode: ${sessionLabel} (${selectedExercises.length} exercice(s))`);
-        selectedExercises.forEach((exo, i) => {
-            console.log(`  ${i + 1}. [${exo.section}] ${exo.nom}`);
-        });
+        if (runConfig.mode === 'duration') {
+            console.log(`\n🎯 Mode: ${sessionLabel}`);
+            console.log('Le bot va vous demander de cliquer un exercice vidéo, puis boucler par cycles de 10 minutes.');
+        } else {
+            console.log(`\n🎯 Mode: ${sessionLabel} (${selectedExercises.length} exercice(s))`);
+            selectedExercises.forEach((exo, i) => {
+                console.log(`  ${i + 1}. [${exo.section}] ${exo.nom}`);
+            });
+        }
 
         // Statistiques pour le résumé
         let exercicesCompletes = 0;
         let exercicesEchoues = 0;
+        let durationModeResult = null;
 
         // Faire une boucle sur les exercices sélectionnés
-        for (let i = 0; i < selectedExercises.length; i++) {
-            const exo = selectedExercises[i];
-            const isLastExercise = i === selectedExercises.length - 1;
-            console.log(`\n--- Démarrage de l'exercice ${i + 1}/${selectedExercises.length}: [${exo.section}] ${exo.nom} ---`);
+        if (runConfig.mode === 'duration') {
+            durationModeResult = await runVideoDurationMode(page, exosPageUrl, runConfig.durationMs, {
+                waitMs: VIDEO_LOOP_WAIT_MS
+            });
+            exercicesCompletes = durationModeResult.successfulLaunches;
+            exercicesEchoues = durationModeResult.failedLaunches;
+        } else {
+            for (let i = 0; i < selectedExercises.length; i++) {
+                const exo = selectedExercises[i];
+                const isLastExercise = i === selectedExercises.length - 1;
+                console.log(`\n--- Démarrage de l'exercice ${i + 1}/${selectedExercises.length}: [${exo.section}] ${exo.nom} ---`);
 
-            // Pour le premier exercice, naviguer depuis la liste
-            // Pour les suivants, on y arrive via "Activité suivante"
-            // Si on a été redirigé vers la liste suite à une erreur, il faut naviguer à nouveau
-            if (i === 0 || !page.url().match(/\/activity/)) {
-                // S'assurer d'être sur la page liste
-                if (!page.url().includes('/user-plannings')) {
-                    await page.goto(exosPageUrl);
-                    await page.waitForURL(exosPageUrl);
-                }
-
-                // Sélectionner la div qui contient les boutons d'exercices
-                const sectionHeader = await page.$(`#${exo.sectionId}`);
-                if (!sectionHeader) {
-                    console.error(`Section ${exo.sectionId} non trouvée`);
-                    continue;
-                }
-
-                // Récupérer la grille d'exercices (nextElementSibling)
-                const exercisesGrid = await sectionHeader.evaluateHandle(el => el.nextElementSibling);
-
-                if (exo.type === 'exam') {
-                    let examCards = await exercisesGrid.$$(':scope > .card.col-span-12');
-                    if (examCards.length === 0) {
-                        examCards = await exercisesGrid.$$('.card.col-span-12');
+                // Pour le premier exercice, naviguer depuis la liste
+                // Pour les suivants, on y arrive via "Activité suivante"
+                // Si on a été redirigé vers la liste suite à une erreur, il faut naviguer à nouveau
+                if (i === 0 || !page.url().match(/\/activity/)) {
+                    // S'assurer d'être sur la page liste
+                    if (!page.url().includes('/user-plannings')) {
+                        await page.goto(exosPageUrl);
+                        await page.waitForURL(exosPageUrl);
                     }
 
-                    const cardIndex = exo.cardIndex || 1;
-                    const targetExamCard = cardIndex > 0 && cardIndex <= examCards.length
-                        ? examCards[cardIndex - 1]
-                        : examCards[0] || null;
-
-                    if (!targetExamCard) {
-                        console.error(`Carte d'exam introuvable pour la section ${exo.sectionId}`);
+                    // Sélectionner la div qui contient les boutons d'exercices
+                    const sectionHeader = await page.$(`#${exo.sectionId}`);
+                    if (!sectionHeader) {
+                        console.error(`Section ${exo.sectionId} non trouvée`);
                         continue;
                     }
 
-                    const startButton = await targetExamCard.$('button:has-text("Continuer"), button:has-text("Commencer"), button:has-text("Reprendre"), button:has-text("Démarrer")');
-                    const examLink = await targetExamCard.$('a[href*="/activity"], a[href*="/exam/activity"], a[href*="/result"]');
+                    // Récupérer la grille d'exercices (nextElementSibling)
+                    const exercisesGrid = await sectionHeader.evaluateHandle(el => el.nextElementSibling);
 
-                    if (startButton) {
-                        await startButton.click();
-                    } else if (examLink) {
-                        await examLink.click();
-                    } else {
-                        console.error(`Aucune action de lancement trouvée pour l'exam: ${exo.nom}`);
-                        continue;
-                    }
+                    if (exo.type === 'exam') {
+                        let examCards = await exercisesGrid.$$(':scope > .card.col-span-12');
+                        if (examCards.length === 0) {
+                            examCards = await exercisesGrid.$$('.card.col-span-12');
+                        }
 
-                    console.log(`Examen cliqué: ${exo.nom}`);
+                        const cardIndex = exo.cardIndex || 1;
+                        const targetExamCard = cardIndex > 0 && cardIndex <= examCards.length
+                            ? examCards[cardIndex - 1]
+                            : examCards[0] || null;
 
-                    // Une popup peut apparaître si l'exam a déjà été commencé.
-                    await handleExamResumePopupIfPresent(page, 'continue');
+                        if (!targetExamCard) {
+                            console.error(`Carte d'exam introuvable pour la section ${exo.sectionId}`);
+                            continue;
+                        }
 
-                    try {
-                        await Promise.race([
-                            page.waitForURL(/\/activity.*/, { timeout: 20000 }),
-                            page.waitForSelector('[data-testid^="question-"], #question-wrapper', { timeout: 20000 })
-                        ]);
-                    } catch {
-                        console.log('⚠ Chargement de l\'activity non confirmé immédiatement (exam), poursuite...');
-                    }
-                } else {
-                    let buttons = await exercisesGrid.$$(':scope > button');
-                    if (buttons.length === 0) {
-                        buttons = await exercisesGrid.$$('button');
-                    }
+                        const startButton = await targetExamCard.$('button:has-text("Continuer"), button:has-text("Commencer"), button:has-text("Reprendre"), button:has-text("Démarrer")');
+                        const examLink = await targetExamCard.$('a[href*="/activity"], a[href*="/exam/activity"], a[href*="/result"]');
 
-                    const buttonIndex = exo.buttonIndex || exo.index;
-                    // Cliquer sur le bouton à l'index correspondant (index - 1 car l'index est 1-based)
-                    if (buttonIndex > 0 && buttonIndex <= buttons.length) {
-                        await buttons[buttonIndex - 1].click();
-                        console.log(`Exercice cliqué: ${exo.nom}`);
-                    } else {
-                        console.error(`Index d'exercice ${buttonIndex} invalide pour la section ${exo.sectionId}`);
-                        continue;
-                    }
+                        if (startButton) {
+                            await startButton.click();
+                        } else if (examLink) {
+                            await examLink.click();
+                        } else {
+                            console.error(`Aucune action de lancement trouvée pour l'exam: ${exo.nom}`);
+                            continue;
+                        }
 
-                    // Attendre que la nouvelle page soit chargée
-                    await page.waitForURL(/\/activity.*/);
-                }
-            } // fin if (i === 0)
+                        console.log(`Examen cliqué: ${exo.nom}`);
 
-            // Détection du type d'exercice
-            const exerciceType = await detectExerciceType(exo);
-            console.log('Type d\'exercice détecté:', exerciceType ? exerciceType.label : 'Inconnu');
+                        // Une popup peut apparaître si l'exam a déjà été commencé.
+                        await handleExamResumePopupIfPresent(page, 'continue');
 
-            // Résoudre l'exercice selon son type
-            if (exerciceType && ['Conversation', 'Monologue', 'QuestionResponse', 'Photograph'].includes(exerciceType.type)) {
-                // Boucle pour résoudre toutes les étapes de l'exercice
-                let isExerciseComplete = false;
-
-                // Fermer les pop-ups si présents, sinon passer à la suite après un délai
-                try {
-                    await page.waitForSelector('button[id="axeptio_btn_acceptAll"]', { timeout: 3000 });
-                    await page.click('button[id="axeptio_btn_acceptAll"]');
-                } catch (e) {
-                    // Le bouton n'est pas apparu, on continue
-                }
-
-
-                while (!isExerciseComplete) {
-                    // Vérifier si on est sur la page de résultat ou récapitulatif AVANT de tenter de résoudre
-                    const currentUrlCheck = page.url();
-                    if (currentUrlCheck.includes('/result') || !currentUrlCheck.match(/\/activity/)) {
-                        isExerciseComplete = true;
-                        console.log('✅ Exercice terminé (page de résultat détectée)');
-                        break;
-                    }
-                    if (await isRecapPage(page)) {
-                        isExerciseComplete = true;
-                        console.log('✅ Exercice terminé (récapitulatif détecté)');
-                        break;
-                    }
-
-                    // Récupérer les données de l'exercice (transcription + questions)
-                    const data = await solveConversation(page);
-
-                    console.log('\n📝 Transcription:');
-                    if (data.transcription && data.transcription.trim()) {
-                        console.log(data.transcription);
-                    } else {
-                        console.log('(vide)');
-                    }
-
-                    // Afficher la progression
-                    const progress = await getProgress(page);
-                    console.log(`\n📊 Progression: ${progress.current}/${progress.total}`);
-
-                    // Attendre le temps de l'audio + temps aléatoire avant de répondre
-                    await waitBasedOnAudio(page, WAIT_ENABLED, WAIT_MIN_EXTRA, WAIT_MAX_EXTRA);
-
-                    // Sélectionner les réponses avec l'IA ou aléatoirement
-                    // Pour Photograph, pas d'IA (inutile car pas de texte)
-                    if (isAIConfigured()) {
-                        console.log('\n🧠 Sélection des réponses avec l\'IA (batch)...');
-                        const letters = await getAIAnswersForConversationBatch(data.transcription, data.questions);
-                        for (let i = 0; i < data.questions.length; i++) {
-                            // Vérifier que la lettre est valide pour cette question (certaines n'ont que 3 réponses)
-                            const numAnswers = data.questions[i].reponses.length;
-                            const validLetters = ['A', 'B', 'C', 'D'].slice(0, numAnswers);
-                            const letter = validLetters.includes(letters[i].toUpperCase()) ? letters[i] : validLetters[Math.floor(Math.random() * numAnswers)];
-                            await selectAnswerByLetter(page, i, letter);
+                        try {
+                            await Promise.race([
+                                page.waitForURL(/\/activity.*/, { timeout: 20000 }),
+                                page.waitForSelector('[data-testid^="question-"], #question-wrapper', { timeout: 20000 })
+                            ]);
+                        } catch {
+                            console.log('⚠ Chargement de l\'activity non confirmé immédiatement (exam), poursuite...');
                         }
                     } else {
-                        console.log('\n🎲 Sélection aléatoire...');
-                        for (let i = 0; i < data.questions.length; i++) {
-                            // Utiliser le nombre réel de réponses pour cette question
-                            const numAnswers = data.questions[i].reponses.length;
-                            const randomLetter = ['A', 'B', 'C', 'D'][Math.floor(Math.random() * numAnswers)];
-                            await selectAnswerByLetter(page, i, randomLetter);
+                        let buttons = await exercisesGrid.$$(':scope > button');
+                        if (buttons.length === 0) {
+                            buttons = await exercisesGrid.$$('button');
                         }
+
+                        const buttonIndex = exo.buttonIndex || exo.index;
+                        // Cliquer sur le bouton à l'index correspondant (index - 1 car l'index est 1-based)
+                        if (buttonIndex > 0 && buttonIndex <= buttons.length) {
+                            await buttons[buttonIndex - 1].click();
+                            console.log(`Exercice cliqué: ${exo.nom}`);
+                        } else {
+                            console.error(`Index d'exercice ${buttonIndex} invalide pour la section ${exo.sectionId}`);
+                            continue;
+                        }
+
+                        // Attendre que la nouvelle page soit chargée
+                        await page.waitForURL(/\/activity.*/);
                     }
+                } // fin if (i === 0)
 
-                    // Valider les réponses
-                    await validateAnswers(page);
+                // Détection du type d'exercice
+                const exerciceType = await detectExerciceType(exo);
+                console.log('Type d\'exercice détecté:', exerciceType ? exerciceType.label : 'Inconnu');
 
-                    // Attendre que la page se mette à jour (récap, changement d'URL ou nouvelles questions)
-                    console.log('⏳ Attente de la transition de page...');
+                // Résoudre l'exercice selon son type
+                if (exerciceType && ['Conversation', 'Monologue', 'QuestionResponse', 'Photograph'].includes(exerciceType.type)) {
+                    // Boucle pour résoudre toutes les étapes de l'exercice
+                    let isExerciseComplete = false;
+
+                    // Fermer les pop-ups si présents, sinon passer à la suite après un délai
                     try {
-                        await Promise.race([
-                            page.waitForSelector('[data-testid="your-grade"]', { timeout: 10000 }),
-                            page.waitForURL(/\/result/, { timeout: 10000 }),
-                            page.waitForTimeout(5000)
-                        ]);
+                        await page.waitForSelector('button[id="axeptio_btn_acceptAll"]', { timeout: 3000 });
+                        await page.click('button[id="axeptio_btn_acceptAll"]');
                     } catch (e) {
-                        // Timeout atteint, on continue la vérification
+                        // Le bouton n'est pas apparu, on continue
                     }
 
-                    // Vérifier si on a terminé l'exercice (redirection vers résultats, récapitulatif ou nouvelle URL)
-                    const currentUrl = page.url();
-                    if (currentUrl.includes('/result') || !currentUrl.match('/activity/')) {
-                        isExerciseComplete = true;
-                        console.log('✅ Exercice terminé!');
-                    } else if (await isRecapPage(page)) {
-                        isExerciseComplete = true;
-                        console.log('✅ Exercice terminé (récapitulatif détecté)!');
-                    } else {
-                        // Vérifier si les questions ont changé
-                        const newProgress = await getProgress(page);
-                        if (newProgress.isResultPage || newProgress.current >= newProgress.total) {
+
+                    while (!isExerciseComplete) {
+                        // Vérifier si on est sur la page de résultat ou récapitulatif AVANT de tenter de résoudre
+                        const currentUrlCheck = page.url();
+                        if (currentUrlCheck.includes('/result') || !currentUrlCheck.match(/\/activity/)) {
+                            isExerciseComplete = true;
+                            console.log('✅ Exercice terminé (page de résultat détectée)');
+                            break;
+                        }
+                        if (await isRecapPage(page)) {
+                            isExerciseComplete = true;
+                            console.log('✅ Exercice terminé (récapitulatif détecté)');
+                            break;
+                        }
+
+                        // Récupérer les données de l'exercice (transcription + questions)
+                        const data = await solveConversation(page);
+
+                        console.log('\n📝 Transcription:');
+                        if (data.transcription && data.transcription.trim()) {
+                            console.log(data.transcription);
+                        } else {
+                            console.log('(vide)');
+                        }
+
+                        // Afficher la progression
+                        const progress = await getProgress(page);
+                        console.log(`\n📊 Progression: ${progress.current}/${progress.total}`);
+
+                        // Attendre le temps de l'audio + temps aléatoire avant de répondre
+                        await waitBasedOnAudio(page, WAIT_ENABLED, WAIT_MIN_EXTRA, WAIT_MAX_EXTRA);
+
+                        // Sélectionner les réponses avec l'IA ou aléatoirement
+                        // Pour Photograph, pas d'IA (inutile car pas de texte)
+                        if (isAIConfigured()) {
+                            console.log('\n🧠 Sélection des réponses avec l\'IA (batch)...');
+                            const letters = await getAIAnswersForConversationBatch(data.transcription, data.questions);
+                            for (let i = 0; i < data.questions.length; i++) {
+                                // Vérifier que la lettre est valide pour cette question (certaines n'ont que 3 réponses)
+                                const numAnswers = data.questions[i].reponses.length;
+                                const validLetters = ['A', 'B', 'C', 'D'].slice(0, numAnswers);
+                                const letter = validLetters.includes(letters[i].toUpperCase()) ? letters[i] : validLetters[Math.floor(Math.random() * numAnswers)];
+                                await selectAnswerByLetter(page, i, letter);
+                            }
+                        } else {
+                            console.log('\n🎲 Sélection aléatoire...');
+                            for (let i = 0; i < data.questions.length; i++) {
+                                // Utiliser le nombre réel de réponses pour cette question
+                                const numAnswers = data.questions[i].reponses.length;
+                                const randomLetter = ['A', 'B', 'C', 'D'][Math.floor(Math.random() * numAnswers)];
+                                await selectAnswerByLetter(page, i, randomLetter);
+                            }
+                        }
+
+                        // Valider les réponses
+                        await validateAnswers(page);
+
+                        // Attendre que la page se mette à jour (récap, changement d'URL ou nouvelles questions)
+                        console.log('⏳ Attente de la transition de page...');
+                        try {
+                            await Promise.race([
+                                page.waitForSelector('[data-testid="your-grade"]', { timeout: 10000 }),
+                                page.waitForURL(/\/result/, { timeout: 10000 }),
+                                page.waitForTimeout(5000)
+                            ]);
+                        } catch (e) {
+                            // Timeout atteint, on continue la vérification
+                        }
+
+                        // Vérifier si on a terminé l'exercice (redirection vers résultats, récapitulatif ou nouvelle URL)
+                        const currentUrl = page.url();
+                        if (currentUrl.includes('/result') || !currentUrl.match('/activity/')) {
                             isExerciseComplete = true;
                             console.log('✅ Exercice terminé!');
-                        }
-                    }
-                }
-
-                exercicesCompletes++;
-
-            } else if (exerciceType && exerciceType.type === 'FillInTheBlank') {
-                // Exercice de type "Phrases à trous" (Reading Partie 5)
-                let isExerciseComplete = false;
-
-                while (!isExerciseComplete) {
-                    // Vérifier si on est sur la page de résultat ou récapitulatif AVANT de tenter de résoudre
-                    const currentUrlCheckPAT = page.url();
-                    if (currentUrlCheckPAT.includes('/result') || !currentUrlCheckPAT.match('/activity/')) {
-                        isExerciseComplete = true;
-                        console.log('✅ Exercice terminé (page de résultat détectée)');
-                        break;
-                    }
-                    if (await isRecapPage(page)) {
-                        isExerciseComplete = true;
-                        console.log('✅ Exercice terminé (récapitulatif détecté)');
-                        break;
-                    }
-
-                    // Récupérer les données de l'exercice (questions)
-                    const data = await solvePhrasesATrous(page);
-
-                    // Afficher la progression
-                    const progress = await getProgressPAT(page);
-                    console.log(`\n📊 Progression: ${progress.current}/${progress.total}`);
-
-                    // Attendre un temps aléatoire pour simuler la réflexion
-                    await waitRandomTime(page, WAIT_ENABLED, WAIT_MIN_EXTRA, WAIT_MAX_EXTRA);
-
-                    // Sélectionner les réponses avec l'IA ou aléatoirement
-                    if (isAIConfigured()) {
-                        console.log('\n🧠 Sélection des réponses avec l\'IA (batch)...');
-                        const letters = await getAIAnswersForFillInTheBlankBatch(data.questions);
-                        for (let i = 0; i < data.questions.length; i++) {
-                            await selectAnswerByLetterPAT(page, i, letters[i]);
-                        }
-                    } else {
-                        console.log('\n⚠ IA non configurée, sélection aléatoire...');
-                        for (let i = 0; i < data.questions.length; i++) {
-                            const randomLetter = ['A', 'B', 'C', 'D'][Math.floor(Math.random() * 4)];
-                            await selectAnswerByLetterPAT(page, i, randomLetter);
-                        }
-                    }
-
-                    // Valider les réponses
-                    await validateAnswersPAT(page);
-
-                    // Attendre que la page se mette à jour (récap, changement d'URL ou nouvelles questions)
-                    console.log('⏳ Attente de la transition de page...');
-                    try {
-                        await Promise.race([
-                            page.waitForSelector('[data-testid="your-grade"]', { timeout: 10000 }),
-                            page.waitForURL(/\/result/, { timeout: 10000 }),
-                            page.waitForTimeout(5000)
-                        ]);
-                    } catch (e) {
-                        // Timeout atteint, on continue la vérification
-                    }
-
-                    // Vérifier si on a terminé l'exercice
-                    const currentUrl = page.url();
-                    if (currentUrl.includes('/result') || !currentUrl.match('/activity/')) {
-                        isExerciseComplete = true;
-                        console.log('✅ Exercice terminé!');
-                    } else if (await isRecapPage(page)) {
-                        isExerciseComplete = true;
-                        console.log('✅ Exercice terminé (récapitulatif détecté)!');
-                    } else {
-                        // Vérifier si les questions ont changé
-                        const newProgress = await getProgressPAT(page);
-                        if (newProgress.current >= newProgress.total) {
+                        } else if (await isRecapPage(page)) {
                             isExerciseComplete = true;
-                            console.log('✅ Exercice terminé!');
+                            console.log('✅ Exercice terminé (récapitulatif détecté)!');
+                        } else {
+                            // Vérifier si les questions ont changé
+                            const newProgress = await getProgress(page);
+                            if (newProgress.isResultPage || newProgress.current >= newProgress.total) {
+                                isExerciseComplete = true;
+                                console.log('✅ Exercice terminé!');
+                            }
                         }
                     }
-                }
 
-                exercicesCompletes++;
-
-            } else if (exerciceType && (exerciceType.type === 'TextCompletion' || exerciceType.type === 'SimpleTextCompletion' || exerciceType.type === 'MultipleTexts')) {
-                // Exercice de type "Textes à compléter" (Reading Partie 6)
-                let isExerciseComplete = false;
-
-                // Récupérer le texte support une seule fois au début
-                const data = await solveTextesACompleter(page);
-
-                while (!isExerciseComplete) {
-                    // Vérifier si on est sur la page de résultat ou récapitulatif AVANT de tenter de résoudre
-                    const currentUrlCheckTAC = page.url();
-                    if (currentUrlCheckTAC.includes('/result') || !currentUrlCheckTAC.match('/activity/')) {
-                        isExerciseComplete = true;
-                        console.log('✅ Exercice terminé (page de résultat détectée)');
-                        break;
-                    }
-                    if (await isRecapPage(page)) {
-                        isExerciseComplete = true;
-                        console.log('✅ Exercice terminé (récapitulatif détecté)');
-                        break;
-                    }
-
-                    // Récupérer la question courante
-                    const question = await getCurrentQuestion(page);
-
-                    // Afficher la progression
-                    const progress = await getProgressTAC(page);
-                    console.log(`\n📊 Progression: ${progress.current}/${progress.total}`);
-
-                    // Attendre un temps aléatoire pour simuler la réflexion
-                    await waitRandomTime(page, WAIT_ENABLED, WAIT_MIN_EXTRA, WAIT_MAX_EXTRA);
-
-                    // Sélectionner la réponse avec l'IA ou aléatoirement
-                    let selectedLetter;
-                    if (isAIConfigured()) {
-                        console.log('\n🧠 Sélection de la réponse avec l\'IA...');
-                        selectedLetter = await getAIAnswerForTextCompletion(data.texte, question);
-                    } else {
-                        console.log('\n⚠ IA non configurée, sélection aléatoire...');
-                        selectedLetter = ['A', 'B', 'C', 'D'][Math.floor(Math.random() * 4)];
-                    }
-                    await selectAnswerByLetterTAC(page, selectedLetter);
-
-                    // Cliquer sur le bouton suivant (Passer/Valider/Terminer)
-                    const buttonResult = await clickNextButton(page);
-
-                    // Attendre que la page se mette à jour (récap, changement d'URL ou nouvelles questions)
-                    console.log('⏳ Attente de la transition de page...');
-                    try {
-                        await Promise.race([
-                            page.waitForSelector('[data-testid="your-grade"]', { timeout: 10000 }),
-                            page.waitForURL(/\/result/, { timeout: 10000 }),
-                            page.waitForTimeout(5000)
-                        ]);
-                    } catch (e) {
-                        // Timeout atteint, on continue la vérification
-                    }
-
-                    // Vérifier si on a terminé l'exercice
-                    const currentUrl = page.url();
-                    if (currentUrl.includes('/result') || !currentUrl.match('/activity/') || buttonResult === 'finish') {
-                        isExerciseComplete = true;
-                        console.log('✅ Exercice terminé!');
-                    } else if (await isRecapPage(page)) {
-                        isExerciseComplete = true;
-                        console.log('✅ Exercice terminé (récapitulatif détecté)!');
-                    } else {
-                        // Vérifier si on a atteint la fin
-                        const newProgress = await getProgressTAC(page);
-                        if (newProgress.current >= newProgress.total) {
-                            isExerciseComplete = true;
-                            console.log('✅ Exercice terminé!');
-                        }
-                    }
-                }
-
-                exercicesCompletes++;
-            } else if (exerciceType && ['TOEICExam1', 'TOEICExam2', 'TOEICExam3', 'TOEICExam4', 'Exam'].includes(exerciceType.type)) {
-                console.log('🧩 Résolution de l\'exam en mode orchestré...');
-
-                const examSummary = await solveExam(page, {
-                    waitEnabled: WAIT_ENABLED,
-                    waitMinExtra: WAIT_MIN_EXTRA,
-                    waitMaxExtra: WAIT_MAX_EXTRA,
-                    examAIEnabled: EXAM_AI_ENABLED,
-                    resumeAction: 'continue'
-                });
-
-                if (examSummary.solvedActivities > 0 || page.url().includes('/result') || await isRecapPage(page)) {
                     exercicesCompletes++;
+
+                } else if (exerciceType && exerciceType.type === 'FillInTheBlank') {
+                    // Exercice de type "Phrases à trous" (Reading Partie 5)
+                    let isExerciseComplete = false;
+
+                    while (!isExerciseComplete) {
+                        // Vérifier si on est sur la page de résultat ou récapitulatif AVANT de tenter de résoudre
+                        const currentUrlCheckPAT = page.url();
+                        if (currentUrlCheckPAT.includes('/result') || !currentUrlCheckPAT.match('/activity/')) {
+                            isExerciseComplete = true;
+                            console.log('✅ Exercice terminé (page de résultat détectée)');
+                            break;
+                        }
+                        if (await isRecapPage(page)) {
+                            isExerciseComplete = true;
+                            console.log('✅ Exercice terminé (récapitulatif détecté)');
+                            break;
+                        }
+
+                        // Récupérer les données de l'exercice (questions)
+                        const data = await solvePhrasesATrous(page);
+
+                        // Afficher la progression
+                        const progress = await getProgressPAT(page);
+                        console.log(`\n📊 Progression: ${progress.current}/${progress.total}`);
+
+                        // Attendre un temps aléatoire pour simuler la réflexion
+                        await waitRandomTime(page, WAIT_ENABLED, WAIT_MIN_EXTRA, WAIT_MAX_EXTRA);
+
+                        // Sélectionner les réponses avec l'IA ou aléatoirement
+                        if (isAIConfigured()) {
+                            console.log('\n🧠 Sélection des réponses avec l\'IA (batch)...');
+                            const letters = await getAIAnswersForFillInTheBlankBatch(data.questions);
+                            for (let i = 0; i < data.questions.length; i++) {
+                                await selectAnswerByLetterPAT(page, i, letters[i]);
+                            }
+                        } else {
+                            console.log('\n⚠ IA non configurée, sélection aléatoire...');
+                            for (let i = 0; i < data.questions.length; i++) {
+                                const randomLetter = ['A', 'B', 'C', 'D'][Math.floor(Math.random() * 4)];
+                                await selectAnswerByLetterPAT(page, i, randomLetter);
+                            }
+                        }
+
+                        // Valider les réponses
+                        await validateAnswersPAT(page);
+
+                        // Attendre que la page se mette à jour (récap, changement d'URL ou nouvelles questions)
+                        console.log('⏳ Attente de la transition de page...');
+                        try {
+                            await Promise.race([
+                                page.waitForSelector('[data-testid="your-grade"]', { timeout: 10000 }),
+                                page.waitForURL(/\/result/, { timeout: 10000 }),
+                                page.waitForTimeout(5000)
+                            ]);
+                        } catch (e) {
+                            // Timeout atteint, on continue la vérification
+                        }
+
+                        // Vérifier si on a terminé l'exercice
+                        const currentUrl = page.url();
+                        if (currentUrl.includes('/result') || !currentUrl.match('/activity/')) {
+                            isExerciseComplete = true;
+                            console.log('✅ Exercice terminé!');
+                        } else if (await isRecapPage(page)) {
+                            isExerciseComplete = true;
+                            console.log('✅ Exercice terminé (récapitulatif détecté)!');
+                        } else {
+                            // Vérifier si les questions ont changé
+                            const newProgress = await getProgressPAT(page);
+                            if (newProgress.current >= newProgress.total) {
+                                isExerciseComplete = true;
+                                console.log('✅ Exercice terminé!');
+                            }
+                        }
+                    }
+
+                    exercicesCompletes++;
+
+                } else if (exerciceType && (exerciceType.type === 'TextCompletion' || exerciceType.type === 'SimpleTextCompletion' || exerciceType.type === 'MultipleTexts')) {
+                    // Exercice de type "Textes à compléter" (Reading Partie 6)
+                    let isExerciseComplete = false;
+
+                    // Récupérer le texte support une seule fois au début
+                    const data = await solveTextesACompleter(page);
+
+                    while (!isExerciseComplete) {
+                        // Vérifier si on est sur la page de résultat ou récapitulatif AVANT de tenter de résoudre
+                        const currentUrlCheckTAC = page.url();
+                        if (currentUrlCheckTAC.includes('/result') || !currentUrlCheckTAC.match('/activity/')) {
+                            isExerciseComplete = true;
+                            console.log('✅ Exercice terminé (page de résultat détectée)');
+                            break;
+                        }
+                        if (await isRecapPage(page)) {
+                            isExerciseComplete = true;
+                            console.log('✅ Exercice terminé (récapitulatif détecté)');
+                            break;
+                        }
+
+                        // Récupérer la question courante
+                        const question = await getCurrentQuestion(page);
+
+                        // Afficher la progression
+                        const progress = await getProgressTAC(page);
+                        console.log(`\n📊 Progression: ${progress.current}/${progress.total}`);
+
+                        // Attendre un temps aléatoire pour simuler la réflexion
+                        await waitRandomTime(page, WAIT_ENABLED, WAIT_MIN_EXTRA, WAIT_MAX_EXTRA);
+
+                        // Sélectionner la réponse avec l'IA ou aléatoirement
+                        let selectedLetter;
+                        if (isAIConfigured()) {
+                            console.log('\n🧠 Sélection de la réponse avec l\'IA...');
+                            selectedLetter = await getAIAnswerForTextCompletion(data.texte, question);
+                        } else {
+                            console.log('\n⚠ IA non configurée, sélection aléatoire...');
+                            selectedLetter = ['A', 'B', 'C', 'D'][Math.floor(Math.random() * 4)];
+                        }
+                        await selectAnswerByLetterTAC(page, selectedLetter);
+
+                        // Cliquer sur le bouton suivant (Passer/Valider/Terminer)
+                        const buttonResult = await clickNextButton(page);
+
+                        // Attendre que la page se mette à jour (récap, changement d'URL ou nouvelles questions)
+                        console.log('⏳ Attente de la transition de page...');
+                        try {
+                            await Promise.race([
+                                page.waitForSelector('[data-testid="your-grade"]', { timeout: 10000 }),
+                                page.waitForURL(/\/result/, { timeout: 10000 }),
+                                page.waitForTimeout(5000)
+                            ]);
+                        } catch (e) {
+                            // Timeout atteint, on continue la vérification
+                        }
+
+                        // Vérifier si on a terminé l'exercice
+                        const currentUrl = page.url();
+                        if (currentUrl.includes('/result') || !currentUrl.match('/activity/') || buttonResult === 'finish') {
+                            isExerciseComplete = true;
+                            console.log('✅ Exercice terminé!');
+                        } else if (await isRecapPage(page)) {
+                            isExerciseComplete = true;
+                            console.log('✅ Exercice terminé (récapitulatif détecté)!');
+                        } else {
+                            // Vérifier si on a atteint la fin
+                            const newProgress = await getProgressTAC(page);
+                            if (newProgress.current >= newProgress.total) {
+                                isExerciseComplete = true;
+                                console.log('✅ Exercice terminé!');
+                            }
+                        }
+                    }
+
+                    exercicesCompletes++;
+                } else if (exerciceType && ['TOEICExam1', 'TOEICExam2', 'TOEICExam3', 'TOEICExam4', 'Exam'].includes(exerciceType.type)) {
+                    console.log('🧩 Résolution de l\'exam en mode orchestré...');
+
+                    const examSummary = await solveExam(page, {
+                        waitEnabled: WAIT_ENABLED,
+                        waitMinExtra: WAIT_MIN_EXTRA,
+                        waitMaxExtra: WAIT_MAX_EXTRA,
+                        examAIEnabled: EXAM_AI_ENABLED,
+                        resumeAction: 'continue'
+                    });
+
+                    if (examSummary.solvedActivities > 0 || page.url().includes('/result') || await isRecapPage(page)) {
+                        exercicesCompletes++;
+                    } else {
+                        console.log('⚠ Exam détecté mais aucune activité résolue');
+                        exercicesEchoues++;
+                    }
                 } else {
-                    console.log('⚠ Exam détecté mais aucune activité résolue');
+                    console.log('⚠ Type d\'exercice non supporté:', exerciceType?.label || 'Inconnu');
                     exercicesEchoues++;
                 }
-            } else {
-                console.log('⚠ Type d\'exercice non supporté:', exerciceType?.label || 'Inconnu');
-                exercicesEchoues++;
-            }
 
-            // Gérer la page de récapitulatif (continuer ou retourner à la liste)
-            await handleRecapPage(page, !isLastExercise, exosPageUrl);
+                // Gérer la page de récapitulatif (continuer ou retourner à la liste)
+                await handleRecapPage(page, !isLastExercise, exosPageUrl);
+            }
         }
 
         // Afficher le résumé de la session
@@ -646,7 +695,27 @@ async function runAutomation() {
         console.log('📊 RÉSUMÉ DE LA SESSION');
         console.log('========================================');
         console.log(`Mode: ${sessionLabel}`);
-        console.log(`Exercices complétés: ${exercicesCompletes}/${selectedExercises.length}`);
+        const totalCible = runConfig.mode === 'duration'
+            ? (durationModeResult?.launchCount || 0)
+            : selectedExercises.length;
+        console.log(`Exercices complétés: ${exercicesCompletes}/${totalCible}`);
+
+        if (runConfig.mode === 'duration' && durationModeResult) {
+            console.log(`Lancements vidéo: ${durationModeResult.launchCount}`);
+            console.log(`Durée cible: ${formatDuration(durationModeResult.plannedDurationMs)}`);
+            console.log(`Durée réelle: ${formatDuration(durationModeResult.elapsedMs)}`);
+            console.log(`Temps activité initial: ${durationModeResult.initialSnapshot.raw || 'N/A'}`);
+            console.log(`Temps activité final: ${durationModeResult.finalSnapshot.raw || 'N/A'}`);
+
+            if (durationModeResult.totalGainMs !== null) {
+                console.log(`Temps gagné observé: ${formatDuration(durationModeResult.totalGainMs)}`);
+            } else {
+                console.log('Temps gagné observé: N/A (format de temps non parseable)');
+            }
+
+            console.log(`Vérifications positives: ${durationModeResult.verifiedIncreases}/${durationModeResult.launchCount}`);
+        }
+
         if (exercicesEchoues > 0) {
             console.log(`Exercices échoués/non supportés: ${exercicesEchoues}`);
         }

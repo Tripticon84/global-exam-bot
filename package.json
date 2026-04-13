@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/main.js",
     "start:section": "node src/main.js --section",
-    "start:one": "node src/main.js --count 1"
+    "start:one": "node src/main.js --count 1",
+    "start:duration10": "node src/main.js --duration 10m"
   },
   "type": "module",
   "dependencies": {
