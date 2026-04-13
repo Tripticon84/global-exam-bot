@@ -3,7 +3,20 @@
  * Supporte ChatGPT (OpenAI) et Gemini (Google)
  */
 
-const AI_PROVIDER = process.env.AI_PROVIDER || 'gemini'; // 'openai' ou 'gemini'
+const TOEIC_SYSTEM_PROMPT = 'Tu es un expert en anglais et en TOEIC. Tu dois répondre aux questions en donnant UNIQUEMENT la lettre de la bonne réponse (A, B, C ou D). Ne donne aucune explication, juste la lettre.';
+
+function getEnvInt(name, fallback) {
+    const parsed = parseInt(process.env[name], 10);
+    return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function truncateText(value, maxLength) {
+    const normalized = String(value || '').replace(/\s+/g, ' ').trim();
+    if (!maxLength || normalized.length <= maxLength) {
+        return normalized;
+    }
+    return `${normalized.slice(0, Math.max(0, maxLength - 1))}…`;
+}
 
 /**
  * Appelle l'API OpenAI (ChatGPT)
@@ -27,7 +40,7 @@ async function callOpenAI(prompt) {
             messages: [
                 {
                     role: 'system',
-                    content: 'Tu es un expert en anglais et en TOEIC. Tu dois répondre aux questions en donnant UNIQUEMENT la lettre de la bonne réponse (A, B, C ou D). Ne donne aucune explication, juste la lettre.'
+                    content: TOEIC_SYSTEM_PROMPT
                 },
                 {
                     role: 'user',
@@ -62,42 +75,78 @@ async function callGemini(prompt) {
     const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
-    const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
+    const baseMaxOutputTokens = getEnvInt('GEMINI_MAX_OUTPUT_TOKENS', 256);
+    const maxRetries = getEnvInt('GEMINI_MAX_RETRIES', 2);
+    const thinkingBudget = getEnvInt('GEMINI_THINKING_BUDGET', 0);
+
+    const extractGeminiText = (data) => {
+        const parts = data?.candidates?.[0]?.content?.parts || [];
+        return parts
+            .map((part) => typeof part?.text === 'string' ? part.text.trim() : '')
+            .filter(Boolean)
+            .join('\n')
+            .trim();
+    };
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        const maxOutputTokens = baseMaxOutputTokens + (attempt * 128);
+
+        const payload = {
             contents: [
                 {
                     parts: [
                         {
-                            text: `Tu es un expert en anglais et en TOEIC. Tu dois répondre aux questions en donnant UNIQUEMENT la lettre de la bonne réponse (A, B, C ou D). Ne donne aucune explication, juste la lettre.\n\n${prompt}`
+                            text: `${TOEIC_SYSTEM_PROMPT}\n\n${prompt}`
                         }
                     ]
                 }
             ],
             generationConfig: {
                 temperature: 0.1,
-                maxOutputTokens: 50
+                maxOutputTokens,
+                responseMimeType: 'text/plain',
+                ...(thinkingBudget >= 0 ? { thinkingConfig: { thinkingBudget } } : {})
             }
-        })
-    });
+        };
 
-    if (!response.ok) {
-        const error = await response.json();
-        throw new Error(`Gemini API error: ${error.error?.message || response.statusText}`);
-    }
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(payload)
+        });
 
-    const data = await response.json();
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(`Gemini API error: ${error.error?.message || response.statusText}`);
+        }
 
-    // Vérifier que la réponse contient les données attendues
-    if (!data.candidates || !data.candidates[0] || !data.candidates[0].content || !data.candidates[0].content.parts || !data.candidates[0].content.parts[0]) {
+        const data = await response.json();
+        const finishReason = data?.candidates?.[0]?.finishReason || 'UNKNOWN';
+        const text = extractGeminiText(data);
+
+        if (text) {
+            return text;
+        }
+
+        const canRetry = attempt < maxRetries;
+        if (finishReason === 'MAX_TOKENS' && canRetry) {
+            console.warn(`⚠ Gemini réponse vide avec finishReason=MAX_TOKENS, retry ${attempt + 1}/${maxRetries} (maxOutputTokens=${maxOutputTokens + 128})`);
+            continue;
+        }
+
         console.error('Réponse Gemini inattendue:', JSON.stringify(data, null, 2));
-        throw new Error('Réponse Gemini invalide ou vide');
+
+        if (canRetry) {
+            console.warn(`⚠ Gemini réponse vide, retry ${attempt + 1}/${maxRetries}`);
+            continue;
+        }
+
+        throw new Error(`Réponse Gemini invalide ou vide (finishReason=${finishReason})`);
     }
 
-    return data.candidates[0].content.parts[0].text.trim();
+    throw new Error('Réponse Gemini invalide ou vide après retries');
 }
 
 /**
@@ -149,22 +198,28 @@ export function extractAnswerLetter(response) {
  * @returns {string} Le prompt formaté
  */
 export function generateConversationPromptBatch(transcription, questions) {
+    const maxTranscriptionChars = getEnvInt('AI_TRANSCRIPTION_MAX_CHARS', 1800);
+    const maxQuestionTextChars = getEnvInt('AI_QUESTION_MAX_CHARS', 220);
+    const maxChoiceTextChars = getEnvInt('AI_CHOICE_MAX_CHARS', 160);
+    const cleanedTranscription = truncateText(transcription, maxTranscriptionChars) || '[Transcription indisponible]';
+
     let prompt = `TOEIC Listening - Conversation/Monologue\n\n`;
-    prompt += `Transcription:\n"${transcription}"\n\n`;
+    prompt += `Transcription:\n"${cleanedTranscription}"\n\n`;
     prompt += `Tu dois répondre à ${questions.length} question(s). Pour chaque question, donne UNIQUEMENT la lettre de la bonne réponse.\n\n`;
 
     questions.forEach((question, index) => {
         prompt += `--- Question ${index + 1} ---\n`;
-        prompt += `${question.texte || question.numero}\n`;
+        prompt += `${truncateText(question.texte || question.numero, maxQuestionTextChars)}\n`;
         prompt += `Choix:\n`;
         question.reponses.forEach(r => {
             const lettre = r.lettre.replace('.', '');
-            prompt += `  ${lettre}: ${r.texte}\n`;
+            prompt += `  ${lettre}: ${truncateText(r.texte, maxChoiceTextChars)}\n`;
         });
         prompt += `\n`;
     });
 
-    prompt += `Réponds avec UNIQUEMENT les lettres dans l'ordre, séparées par des virgules. Exemple: A,B,C,D`;
+    prompt += `Format de sortie strict: ${questions.map((_, index) => `Q${index + 1}=A|B|C|D`).join(', ')}.\n`;
+    prompt += `Réponds sur UNE SEULE LIGNE, sans explication. Exemple: Q1=B, Q2=D, Q3=A`;
 
     return prompt;
 }
@@ -223,6 +278,10 @@ export function generateTextCompletionPrompt(texte, question) {
  * @returns {string[]} Les lettres extraites
  */
 export function parseMultipleAnswers(response, expectedCount) {
+    if (!response || typeof response !== 'string') {
+        return Array.from({ length: expectedCount }, () => ['A', 'B', 'C', 'D'][Math.floor(Math.random() * 4)]);
+    }
+
     // Nettoyer la réponse
     const cleaned = response.toUpperCase().replace(/[^ABCD,\s]/g, '');
 
@@ -251,7 +310,9 @@ export function parseMultipleAnswers(response, expectedCount) {
  */
 export async function getAIAnswersForConversationBatch(transcription, questions) {
     const prompt = generateConversationPromptBatch(transcription, questions);
-    console.log('\n📤 Prompt envoyé à l\'IA:\n', prompt.substring(0, 500) + '...\n');
+    const head = prompt.slice(0, 500);
+    const tail = prompt.length > 700 ? prompt.slice(-200) : '';
+    console.log(`\n📤 Prompt envoyé à l'IA (${prompt.length} caractères):\n${head}${prompt.length > 500 ? '\n...[tronqué dans les logs]...\n' : ''}${tail}\n`);
 
     const response = await callAI(prompt);
     const letters = parseMultipleAnswers(response, questions.length);

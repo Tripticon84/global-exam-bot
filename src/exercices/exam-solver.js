@@ -27,6 +27,7 @@ import {
     getAIAnswersForFillInTheBlankBatch,
     getAIAnswerForTextCompletion
 } from '../ai/ai-provider.js';
+import { getSectionKind } from './dom-parsers.js';
 
 /**
  * Vérifie si la page de récapitulatif de fin d'activité est affichée.
@@ -141,12 +142,12 @@ async function isListeningExercise(page) {
         return false;
     }
 
-    const isReading = await page.evaluate(() => {
-        const sectionImg = document.querySelector('img[src*="reading"]');
-        return !!sectionImg;
-    }).catch(() => false);
+    const section = await getSectionKind(page);
+    if (section === 'reading') return false;
+    if (section === 'listening') return true;
 
-    return !isReading;
+    const hasMediaPlay = await page.$('[data-testid="media-play"]');
+    return !!hasMediaPlay;
 }
 
 /**

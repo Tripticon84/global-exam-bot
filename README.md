@@ -87,6 +87,14 @@ OPENAI_MODEL=gpt-4o-mini
 # Obtenez votre clé sur https://aistudio.google.com/app/apikey
 GEMINI_API_KEY=
 GEMINI_MODEL=gemini-2.0-flash
+GEMINI_MAX_OUTPUT_TOKENS=256
+GEMINI_MAX_RETRIES=2
+GEMINI_THINKING_BUDGET=0
+
+# Limites de taille du prompt IA
+AI_TRANSCRIPTION_MAX_CHARS=1800
+AI_QUESTION_MAX_CHARS=220
+AI_CHOICE_MAX_CHARS=160
 ```
 
 ## 🎮 Utilisation
@@ -150,7 +158,16 @@ OPENAI_MODEL=gpt-4o-mini
 AI_PROVIDER=gemini
 GEMINI_API_KEY=votre-cle-api
 GEMINI_MODEL=gemini-2.0-flash
+GEMINI_MAX_OUTPUT_TOKENS=256
+GEMINI_MAX_RETRIES=2
+GEMINI_THINKING_BUDGET=0
+
+AI_TRANSCRIPTION_MAX_CHARS=1800
+AI_QUESTION_MAX_CHARS=220
+AI_CHOICE_MAX_CHARS=160
 ```
+
+`GEMINI_THINKING_BUDGET=0` aide a eviter les reponses vides avec `finishReason=MAX_TOKENS` sur certains modeles Gemini 2.5.
 
 > 💡 **Sans configuration IA**, le bot sélectionnera des réponses aléatoires.
 > 📸 **Note** : Les exercices **Photographie** utilisent toujours des réponses aléatoires (l'IA n'est pas utile sans texte/transcription).

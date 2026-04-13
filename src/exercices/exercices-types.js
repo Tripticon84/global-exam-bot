@@ -1,3 +1,5 @@
+import { includesNormalized } from './dom-parsers.js';
+
 export const EXERCICE_TYPES = [
     {
         category: "Listening",
@@ -66,19 +68,35 @@ export const EXERCICE_TYPES = [
     }
 ];
 
-export const getExerciceType = (id) => EXERCICE_TYPES.find((t) => t.id === id) || null;
+export const getExerciceType = (value) => {
+    if (!value) return null;
+    return EXERCICE_TYPES.find((t) => t.type === value || t.label === value || t.id === value) || null;
+};
 
 // Détection du type d'exercice
 export const detectExerciceType = async (exo) => {
-    if (!exo?.nom) {
-        return null;
-    }
+    if (!exo) return null;
+
+    const nom = exo.nom || '';
+    const exoType = (exo.type || '').toLowerCase();
 
     // Priorité aux tags explicites [TOEIC 1..4]
-    const toeicMatch = exo.nom.match(/\[TOEIC\s*([1-4])\]/i);
+    const toeicMatch = nom.match(/\[TOEIC\s*([1-4])\]/i);
     if (toeicMatch) {
         return EXERCICE_TYPES.find((t) => t.type === `TOEICExam${toeicMatch[1]}`) || null;
     }
 
-    return EXERCICE_TYPES.find((t) => exo.nom && exo.nom.includes(t.label)) || null;
-}
+    if (exoType === 'exam') {
+        return EXERCICE_TYPES.find((t) => t.type === 'Exam') || null;
+    }
+
+    const byLabel = EXERCICE_TYPES.find((t) => includesNormalized(nom, t.label));
+    if (byLabel) return byLabel;
+
+    if (exoType === 'listening') {
+        return EXERCICE_TYPES.find((t) => t.type === 'Conversation') || null;
+    }
+
+    return null;
+};
+

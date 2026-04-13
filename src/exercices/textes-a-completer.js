@@ -1,3 +1,5 @@
+import { extractProgress, extractQuestionsFromPage, getSectionKind } from './dom-parsers.js';
+
 /**
  * Résout un exercice de type "Textes à compléter" (Reading Partie 6)
  * @param {import('playwright').Page} page - La page Playwright
@@ -35,111 +37,7 @@ export async function solveTextesACompleter(page) {
  * @returns {Promise<Object>} Les données de la question courante
  */
 export async function getCurrentQuestion(page) {
-    const questionData = await page.evaluate(() => {
-        // Trouver la question visible (ancien DOM + nouveau DOM)
-        const allQuestions = Array.from(document.querySelectorAll('[data-testid^="question-"]'));
-        let visibleQuestion = allQuestions.find((el) => !el.classList.contains('hidden')) || null;
-
-        if (!visibleQuestion) {
-            visibleQuestion = document.querySelector('#question-wrapper');
-        }
-
-        let visibleIndex = allQuestions.indexOf(visibleQuestion);
-        if (visibleIndex < 0) {
-            const pageIndicator = document.querySelector('[data-testid="page-indicator"]');
-            const indicatorMatch = pageIndicator?.textContent?.match(/(\d+)\s*\/\s*(\d+)/);
-            visibleIndex = indicatorMatch ? Math.max(parseInt(indicatorMatch[1], 10) - 1, 0) : 0;
-        }
-
-        if (!visibleQuestion) {
-            return null;
-        }
-
-        const data = {
-            index: visibleIndex,
-            numero: '',
-            texte: '',
-            reponses: []
-        };
-
-        // Numéro de la question
-        const numeroElement = visibleQuestion.querySelector('[data-testid="question-number"], .font-bold.text-size-20');
-        data.numero = numeroElement?.textContent?.trim() || `Question ${visibleIndex + 1}`;
-
-        // Texte de la question
-        const texteElement = visibleQuestion.querySelector('[data-testid="question-text"], #question-header h2, #question-header p, .text-neutral-80.leading-tight.mb-8 p, .text-neutral-80.leading-tight.mb-8');
-        data.texte = texteElement?.innerText?.trim() || '';
-
-        // Réponses possibles
-        const answerLabels = visibleQuestion.querySelectorAll('[data-testid^="exam-answer-"], #question-content label[for], #question-content label, label[for^="radio-"]');
-        answerLabels.forEach((label, answerIndex) => {
-            const labelElement = label.matches('label') ? label : (label.querySelector('label') || label);
-            const labelFor = labelElement.getAttribute('for');
-            const input = labelFor
-                ? document.getElementById(labelFor)
-                : labelElement.querySelector('input[type="radio"]');
-
-            let lettre = '';
-            let texte = '';
-
-            // Méthode 1: chercher les spans dans .text-neutral-80
-            const textSpans = label.querySelectorAll('.text-neutral-80 span');
-            if (textSpans.length >= 2) {
-                lettre = textSpans[0]?.textContent?.trim() || '';
-                texte = textSpans[1]?.textContent?.trim() || '';
-            }
-
-            // Méthode 2: chercher dans .flex
-            if (!texte) {
-                const flexDiv = label.querySelector('.flex');
-                if (flexDiv) {
-                    const allSpans = flexDiv.querySelectorAll('span');
-                    if (allSpans.length >= 2) {
-                        lettre = allSpans[0]?.textContent?.trim() || '';
-                        texte = allSpans[1]?.textContent?.trim() || '';
-                    } else if (allSpans.length === 1) {
-                        const fullText = allSpans[0]?.textContent?.trim() || '';
-                        const match = fullText.match(/^([A-D]\.?)\s*(.*)$/);
-                        if (match) {
-                            lettre = match[1];
-                            texte = match[2];
-                        } else {
-                            texte = fullText;
-                        }
-                    }
-                }
-            }
-
-            // Méthode 3: parser tout le texte du label
-            if (!texte) {
-                const fullText = labelElement.textContent?.trim() || '';
-                const match = fullText.match(/^([A-D]\.?)\s*(.*)$/);
-                if (match) {
-                    lettre = match[1];
-                    texte = match[2];
-                } else {
-                    texte = fullText;
-                    lettre = ['A.', 'B.', 'C.', 'D.'][answerIndex] || '';
-                }
-            }
-
-            if (!lettre) {
-                lettre = ['A.', 'B.', 'C.', 'D.'][answerIndex] || '';
-            }
-
-            data.reponses.push({
-                index: answerIndex,
-                lettre: lettre,
-                texte: texte,
-                value: input?.value || '',
-                selector: labelFor
-                    ? `label[for="${labelFor}"]`
-                    : `[data-testid="question-${visibleIndex}"] [data-testid="exam-answer-${answerIndex + 1}"]`
-            });
-        });
-
-        return data;
-    });
+    const [questionData] = await extractQuestionsFromPage(page, { visibleOnly: true });
 
     if (questionData) {
         console.log(`\n${questionData.numero}: ${questionData.texte}`);
@@ -237,20 +135,8 @@ export async function clickNextButton(page) {
  * @returns {Promise<{current: number, total: number}>}
  */
 export async function getProgress(page) {
-    const progressText = await page.evaluate(() => {
-        const progressElement = document.querySelector('.text-size-12.text-primary-80');
-        return progressElement?.textContent?.trim() || '';
-    });
-
-    const match = progressText.match(/(\d+)\/(\d+)/);
-    if (match) {
-        return {
-            current: parseInt(match[1]),
-            total: parseInt(match[2])
-        };
-    }
-
-    return { current: 0, total: 0 };
+    const progress = await extractProgress(page);
+    return { current: progress.current, total: progress.total };
 }
 
 /**
@@ -283,9 +169,6 @@ export async function clickStartButtonIfPresent(page) {
 export async function isTextesACompleterExercise(page) {
     const hasQuestions = await page.$('[data-testid^="question-"], #question-wrapper');
     const hasSupports = await page.$('#supports, #question-test .bullet-list');
-    const isReading = await page.evaluate(() => {
-        const sectionImg = document.querySelector('img[src*="reading"]');
-        return !!sectionImg;
-    });
+    const isReading = (await getSectionKind(page)) === 'reading';
     return !!(hasQuestions && hasSupports && isReading);
 }

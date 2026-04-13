@@ -1,3 +1,5 @@
+import { extractProgress, extractQuestionsFromPage, getSectionKind } from './dom-parsers.js';
+
 /**
  * Résout un exercice de type "Phrases à trous" (Reading Partie 5)
  * @param {import('playwright').Page} page - La page Playwright
@@ -10,102 +12,7 @@ export async function solvePhrasesATrous(page) {
     // Attendre que la page soit chargée
     await page.waitForSelector('[data-testid^="question-"], #question-wrapper', { timeout: 10000 });
 
-    // Récupérer les questions et leurs réponses
-    const questionsData = await page.evaluate(() => {
-        const questions = [];
-        const questionElements = document.querySelectorAll('[data-testid^="question-"], #question-wrapper');
-
-        questionElements.forEach((questionEl, index) => {
-            const questionData = {
-                index: index,
-                numero: '',
-                texte: '',
-                reponses: []
-            };
-
-            // Numéro de la question (ex: "Question 1")
-            const numeroElement = questionEl.querySelector('[data-testid="question-number"], #question-header > span, #question-header span, .font-bold.text-size-20');
-            questionData.numero = numeroElement?.textContent?.trim() || `Question ${index + 1}`;
-
-            // Texte de la question (phrase avec le trou)
-            const texteElement = questionEl.querySelector('[data-testid="question-text"], #question-header h2, #question-header p, .text-neutral-80.leading-tight.mb-8 p, .text-neutral-80.leading-tight.mb-8');
-            questionData.texte = texteElement?.innerText?.trim() || '';
-
-            // Réponses possibles
-            const answerLabels = questionEl.querySelectorAll('[data-testid^="exam-answer-"], #question-content label[for], #question-content label, label[for^="radio-"]');
-            answerLabels.forEach((label, answerIndex) => {
-                const labelElement = label.matches('label') ? label : (label.querySelector('label') || label);
-                const labelFor = labelElement.getAttribute('for');
-                const input = labelFor
-                    ? document.getElementById(labelFor)
-                    : labelElement.querySelector('input[type="radio"]');
-
-                // Récupérer le texte de la réponse de différentes manières
-                let lettre = '';
-                let texte = '';
-
-                // Méthode 1: chercher les spans dans .text-neutral-80
-                const textSpans = label.querySelectorAll('.text-neutral-80 span');
-                if (textSpans.length >= 2) {
-                    lettre = textSpans[0]?.textContent?.trim() || '';
-                    texte = textSpans[1]?.textContent?.trim() || '';
-                }
-
-                // Méthode 2: si pas trouvé, chercher directement dans le label
-                if (!texte) {
-                    const flexDiv = label.querySelector('.flex');
-                    if (flexDiv) {
-                        const allSpans = flexDiv.querySelectorAll('span');
-                        if (allSpans.length >= 2) {
-                            lettre = allSpans[0]?.textContent?.trim() || '';
-                            texte = allSpans[1]?.textContent?.trim() || '';
-                        } else if (allSpans.length === 1) {
-                            const fullText = allSpans[0]?.textContent?.trim() || '';
-                            const match = fullText.match(/^([A-D]\.?)\s*(.*)$/);
-                            if (match) {
-                                lettre = match[1];
-                                texte = match[2];
-                            } else {
-                                texte = fullText;
-                            }
-                        }
-                    }
-                }
-
-                // Méthode 3: récupérer tout le texte du label et parser
-                if (!texte) {
-                    const fullText = labelElement.textContent?.trim() || '';
-                    const match = fullText.match(/^([A-D]\.?)\s*(.*)$/);
-                    if (match) {
-                        lettre = match[1];
-                        texte = match[2];
-                    } else {
-                        texte = fullText;
-                        lettre = ['A.', 'B.', 'C.', 'D.'][answerIndex] || '';
-                    }
-                }
-
-                // Si toujours pas de lettre, assigner par défaut
-                if (!lettre) {
-                    lettre = ['A.', 'B.', 'C.', 'D.'][answerIndex] || '';
-                }
-
-                questionData.reponses.push({
-                    index: answerIndex,
-                    lettre: lettre,
-                    texte: texte,
-                    value: input?.value || '',
-                    selector: labelFor
-                        ? `label[for="${labelFor}"]`
-                        : `[data-testid="question-${index}"] [data-testid="exam-answer-${answerIndex + 1}"]`
-                });
-            });
-
-            questions.push(questionData);
-        });
-
-        return questions;
-    });
+    const questionsData = await extractQuestionsFromPage(page);
 
     console.log(`✓ ${questionsData.length} questions récupérées`);
 
@@ -253,10 +160,7 @@ export async function validateAnswers(page) {
 export async function isPhrasesATrousExercise(page) {
     const hasQuestions = await page.$('[data-testid^="question-"], #question-wrapper');
     const hasNoTranscription = !(await page.$('button:has-text("Transcription")'));
-    const isReading = await page.evaluate(() => {
-        const sectionImg = document.querySelector('img[src*="reading"]');
-        return !!sectionImg;
-    });
+    const isReading = (await getSectionKind(page)) === 'reading';
     return !!(hasQuestions && hasNoTranscription && isReading);
 }
 
@@ -266,20 +170,8 @@ export async function isPhrasesATrousExercise(page) {
  * @returns {Promise<{current: number, total: number}>}
  */
 export async function getProgress(page) {
-    const progressText = await page.evaluate(() => {
-        const progressElement = document.querySelector('.text-size-12.text-primary-80');
-        return progressElement?.textContent?.trim() || '';
-    });
-
-    const match = progressText.match(/(\d+)\/(\d+)/);
-    if (match) {
-        return {
-            current: parseInt(match[1]),
-            total: parseInt(match[2])
-        };
-    }
-
-    return { current: 0, total: 0 };
+    const progress = await extractProgress(page);
+    return { current: progress.current, total: progress.total };
 }
 
 /**

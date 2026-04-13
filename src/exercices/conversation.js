@@ -1,3 +1,10 @@
+import {
+    extractAudioDuration,
+    extractProgress,
+    extractQuestionsFromPage,
+    getSectionKind
+} from './dom-parsers.js';
+
 /**
  * Résout un exercice de type "Conversation" (Listening Partie 3)
  * @param {import('playwright').Page} page - La page Playwright
@@ -275,103 +282,7 @@ export async function solveConversation(page, options = {}) {
     }
 
     // 4. Récupérer les questions et leurs réponses
-    const questionsData = await page.evaluate(() => {
-        const questions = [];
-        const questionElements = document.querySelectorAll('[data-testid^="question-"], #question-wrapper');
-
-        questionElements.forEach((questionEl, index) => {
-            const questionData = {
-                index: index,
-                numero: '',
-                texte: '',
-                reponses: []
-            };
-
-            // Numéro de la question (ex: "Question 28")
-            const numeroElement = questionEl.querySelector('[data-testid="question-number"], #question-header > span, #question-header span, .font-bold.text-size-20');
-            questionData.numero = numeroElement?.textContent?.trim() || `Question ${index + 1}`;
-
-            // Texte de la question
-            const texteElement = questionEl.querySelector('[data-testid="question-text"], #question-header h2, #question-header p, .text-neutral-80.leading-tight.mb-8 p, .text-neutral-80.leading-tight.mb-8');
-            questionData.texte = texteElement?.innerText?.trim() || '';
-
-            // Réponses possibles
-            const answerLabels = questionEl.querySelectorAll('[data-testid^="exam-answer-"], #question-content label[for], #question-content label, label[for^="radio-"]');
-            answerLabels.forEach((label, answerIndex) => {
-                const labelElement = label.matches('label') ? label : (label.querySelector('label') || label);
-                const labelFor = labelElement.getAttribute('for');
-                const input = labelFor
-                    ? document.getElementById(labelFor)
-                    : labelElement.querySelector('input[type="radio"]');
-
-                // Récupérer le texte de la réponse de différentes manières
-                let lettre = '';
-                let texte = '';
-
-                // Méthode 1: chercher les spans dans .text-neutral-80
-                const textSpans = label.querySelectorAll('.text-neutral-80 span');
-                if (textSpans.length >= 2) {
-                    lettre = textSpans[0]?.textContent?.trim() || '';
-                    texte = textSpans[1]?.textContent?.trim() || '';
-                }
-
-                // Méthode 2: si pas trouvé, chercher directement dans le label
-                if (!texte) {
-                    const flexDiv = label.querySelector('.flex');
-                    if (flexDiv) {
-                        const allSpans = flexDiv.querySelectorAll('span');
-                        if (allSpans.length >= 2) {
-                            // Premier span = lettre (A., B., etc.), deuxième = texte
-                            lettre = allSpans[0]?.textContent?.trim() || '';
-                            texte = allSpans[1]?.textContent?.trim() || '';
-                        } else if (allSpans.length === 1) {
-                            // Un seul span contient tout le texte
-                            const fullText = allSpans[0]?.textContent?.trim() || '';
-                            const match = fullText.match(/^([A-D]\.?)\s*(.*)$/);
-                            if (match) {
-                                lettre = match[1];
-                                texte = match[2];
-                            } else {
-                                texte = fullText;
-                            }
-                        }
-                    }
-                }
-
-                // Méthode 3: récupérer tout le texte du label et parser
-                if (!texte) {
-                    const fullText = labelElement.textContent?.trim() || '';
-                    const match = fullText.match(/^([A-D]\.?)\s*(.*)$/);
-                    if (match) {
-                        lettre = match[1];
-                        texte = match[2];
-                    } else {
-                        texte = fullText;
-                        lettre = ['A.', 'B.', 'C.', 'D.'][answerIndex] || '';
-                    }
-                }
-
-                // Si toujours pas de lettre, assigner par défaut
-                if (!lettre) {
-                    lettre = ['A.', 'B.', 'C.', 'D.'][answerIndex] || '';
-                }
-
-                questionData.reponses.push({
-                    index: answerIndex,
-                    lettre: lettre,
-                    texte: texte,
-                    value: input?.value || '',
-                    selector: labelFor
-                        ? `label[for="${labelFor}"]`
-                        : `[data-testid="question-${index}"] [data-testid="exam-answer-${answerIndex + 1}"]`
-                });
-            });
-
-            questions.push(questionData);
-        });
-
-        return questions;
-    });
+    const questionsData = await extractQuestionsFromPage(page);
 
     console.log(`✓ ${questionsData.length} questions récupérées`);
 
@@ -580,7 +491,8 @@ export async function solveCurrentStep(page, answers = null) {
 export async function isConversationExercise(page) {
     const hasQuestions = await page.$('[data-testid^="question-"], #question-wrapper');
     const hasTranscription = await page.$('button:has-text("Transcription"), button:has-text("Transcript"), button:has-text("Voir le transcript")');
-    return !!(hasQuestions && hasTranscription);
+    const section = await getSectionKind(page);
+    return !!(hasQuestions && (hasTranscription || section === 'listening'));
 }
 
 /**
@@ -595,40 +507,12 @@ export async function getProgress(page) {
         return { current: 0, total: 0, isResultPage: true };
     }
 
-    const progressText = await page.evaluate(() => {
-        // Chercher le texte type "27/39" dans l'élément dédié
-        const exact = document.querySelector('.text-size-12.text-primary-80')?.textContent?.trim();
-        if (exact && /(\d+)\/(\d+)/.test(exact)) return exact;
-
-        // Fallback: chercher uniquement dans les éléments visibles de petite taille (pas les scripts/json)
-        const candidates = Array.from(document.querySelectorAll('p, span'))
-            .filter(el => {
-                const rect = el.getBoundingClientRect();
-                const style = window.getComputedStyle(el);
-                return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
-            })
-            .map(el => el.textContent?.trim() || '')
-            .filter(txt => {
-                if (!txt || txt.length > 20) return false; // Le texte de progression est court
-                const m = txt.match(/(\d+)\/(\d+)/);
-                if (!m) return false;
-                const total = parseInt(m[2]);
-                return total > 0 && total <= 200; // Limiter à des valeurs raisonnables
-            });
-
-        return candidates[0] || '';
-    });
-
-    const match = progressText.match(/(\d+)\/(\d+)/);
-    if (match) {
-        return {
-            current: parseInt(match[1]),
-            total: parseInt(match[2]),
-            isResultPage: false
-        };
-    }
-
-    return { current: 0, total: 0, isResultPage: false };
+    const progress = await extractProgress(page);
+    return {
+        current: progress.current,
+        total: progress.total,
+        isResultPage: false
+    };
 }
 
 /**
@@ -650,38 +534,14 @@ export async function getTimeRemaining(page) {
  * @returns {Promise<number>} La durée en millisecondes
  */
 export async function getAudioDuration(page) {
-    const durationText = await page.evaluate(() => {
-        // Chercher le texte avec le format "00:00 / XX:XX"
-        const direct = document.querySelector('.w-24.shrink-0.text-size-14, p.shrink-0.font-normal.leading-4.text-14');
-        if (direct) {
-            const text = direct.textContent?.trim() || '';
-            const match = text.match(/\/\s*(\d{1,2}):(\d{2})/);
-            if (match) {
-                return `${match[1]}:${match[2]}`;
-            }
-        }
-
-        const allTexts = Array.from(document.querySelectorAll('p, span, div'))
-            .map((el) => el.textContent?.trim() || '');
-        const found = allTexts.find((txt) => /\d{1,2}:\d{2}\s*\/\s*\d{1,2}:\d{2}/.test(txt));
-        if (!found) return '';
-        const match = found.match(/\/\s*(\d{1,2}):(\d{2})/);
-        if (match) {
-            return `${match[1]}:${match[2]}`;
-        }
-        return '';
-    });
-
-    if (!durationText) {
+    const audio = await extractAudioDuration(page);
+    if (!audio.durationMs) {
         console.log('⚠ Durée audio non trouvée, utilisation de 0ms');
         return 0;
     }
 
-    // Convertir MM:SS en millisecondes
-    const [minutes, seconds] = durationText.split(':').map(Number);
-    const durationMs = (minutes * 60 + seconds) * 1000;
-    console.log(`🎵 Durée audio: ${durationText} (${durationMs}ms)`);
-    return durationMs;
+    console.log(`🎵 Durée audio: ${audio.durationText || 'inconnue'} (${audio.durationMs}ms, source: ${audio.source})`);
+    return audio.durationMs;
 }
 
 /**
